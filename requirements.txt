@@ -1,0 +1,11 @@
+# Cross-platform deps (install everywhere, incl. local dev on Mac/Linux)
+requests>=2.31
+Pillow>=10.0
+Flask>=3.0
+gtfs-realtime-bindings>=1.0.0
+protobuf>=4.21
+
+# Raspberry Pi only — the Inky panel driver. Pulls in RPi.GPIO / spidev which
+# won't install on a Mac, so install it separately on the Pi:
+#     pip install inky[rpi]
+# (kept out of the main list so `pip install -r requirements.txt` works on dev)

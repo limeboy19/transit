@@ -1,0 +1,37 @@
+{
+  "refresh_seconds": 60,
+  "vars": {
+    "cta_key": "",
+    "mta_key": "",
+    "njt_key": ""
+  },
+  "feeds": [
+    {
+      "type": "cta",
+      "enabled": true,
+      "label": "Clark/Lake",
+      "stop_id": "40380",
+      "api_key": "${cta_key}",
+      "zip": "60601",
+      "refresh_seconds": 60
+    },
+    {
+      "type": "mta",
+      "enabled": false,
+      "label": "Atlantic Av — Uptown",
+      "stop_id": "R31N",
+      "api_key": "${mta_key}",
+      "zip": "",
+      "refresh_seconds": 60
+    },
+    {
+      "type": "njt",
+      "enabled": false,
+      "label": "NJ Transit",
+      "stop_id": "",
+      "api_key": "${njt_key}",
+      "zip": "",
+      "refresh_seconds": 60
+    }
+  ]
+}

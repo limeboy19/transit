@@ -1,0 +1,4 @@
+# Optional: pull API keys from Azure Key Vault instead of config.json.
+# Install only if you set a Key Vault URL:  pip install -r requirements-azure.txt
+azure-identity>=1.15
+azure-keyvault-secrets>=4.7

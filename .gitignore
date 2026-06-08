@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+preview*.png
+autoupdate.log
+
+# Your real config holds API keys — keep it OUT of git so it's never committed
+# and so the auto-update `git reset --hard` can't clobber it. Ship
+# config.example.json as the template instead.
+config.json
+
+# Azure service principal creds (AZURE_* env vars) — never commit.
+.env
+*.env

@@ -1,0 +1,17 @@
+[Unit]
+Description=Raspberry Pi Transit Display
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/transit-display
+ExecStart=/home/pi/transit-display/.venv/bin/python /home/pi/transit-display/main.py
+Restart=always
+RestartSec=10
+# Inky needs SPI/GPIO access; the pi user is in the relevant groups by default.
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

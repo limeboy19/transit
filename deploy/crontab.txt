@@ -1,0 +1,5 @@
+# Auto git pull + service restart every 5 minutes.
+# Install with:  crontab -e   (then paste the line below)
+# Logs go to /home/pi/transit-display/autoupdate.log
+
+*/5 * * * * /home/pi/transit-display/deploy/autoupdate.sh >> /home/pi/transit-display/autoupdate.log 2>&1
