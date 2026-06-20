@@ -299,9 +299,9 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
     # gap after the badge equals the left margin (pad) so spacing is symmetric.
     dest_x = x + pad + badge_w + pad
     if dep.mode == "bus":
-        _draw_bus_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 42
+        _draw_bus_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 50
     else:
-        _draw_train_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 42
+        _draw_train_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 50
     f_to = _font("regular", 18)
     f_dest = _font("bold", 34)
     content_right = x + w - pad - 170        # reserve room for the ETA on the right
@@ -337,30 +337,30 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
 
 
 def _draw_bus_icon(draw, x, cy, color):
-    """Bus glyph (~32px): boxy body, window strip, two round wheels (road vehicle)."""
-    w, h = 32, 22
+    """Bus glyph (~40px wide): boxy body, window strip, two round wheels (road vehicle)."""
+    w, h = 40, 24
     top = cy - h // 2
     draw.rounded_rectangle([x, top, x + w, top + h], radius=6, outline=color, width=3)
     # window strip across the top
-    draw.line([(x + 5, top + 8), (x + w - 5, top + 8)], fill=color, width=2)
+    draw.line([(x + 6, top + 9), (x + w - 6, top + 9)], fill=color, width=2)
     # two round wheels hanging below the body
     r = 3
-    draw.ellipse([x + 6, top + h - 2, x + 6 + 2 * r, top + h - 2 + 2 * r], fill=color)
-    draw.ellipse([x + w - 6 - 2 * r, top + h - 2, x + w - 6, top + h - 2 + 2 * r], fill=color)
+    draw.ellipse([x + 9, top + h - 2, x + 9 + 2 * r, top + h - 2 + 2 * r], fill=color)
+    draw.ellipse([x + w - 9 - 2 * r, top + h - 2, x + w - 9, top + h - 2 + 2 * r], fill=color)
 
 
 def _draw_train_icon(draw, x, cy, color):
-    """Train glyph (~32px): rounded railcar, two windows, sitting on a rail (no wheels)."""
-    w, h = 32, 22
+    """Train glyph (~40px wide): rounded railcar, two windows, sitting on a rail (no wheels)."""
+    w, h = 40, 24
     top = cy - h // 2
-    draw.rounded_rectangle([x, top, x + w, top + h], radius=9, outline=color, width=3)
+    draw.rounded_rectangle([x, top, x + w, top + h], radius=10, outline=color, width=3)
     # two windows up top
-    draw.rectangle([x + 6, top + 5, x + w // 2 - 2, top + 12], outline=color, width=2)
-    draw.rectangle([x + w // 2 + 2, top + 5, x + w - 6, top + 12], outline=color, width=2)
+    draw.rectangle([x + 7, top + 5, x + w // 2 - 3, top + 14], outline=color, width=2)
+    draw.rectangle([x + w // 2 + 3, top + 5, x + w - 7, top + 14], outline=color, width=2)
     # short legs onto a rail line below (rail vehicle, not road)
-    draw.line([(x + 8, top + h), (x + 8, top + h + 3)], fill=color, width=2)
-    draw.line([(x + w - 8, top + h), (x + w - 8, top + h + 3)], fill=color, width=2)
-    draw.line([(x + 2, top + h + 4), (x + w - 2, top + h + 4)], fill=color, width=2)
+    draw.line([(x + 10, top + h), (x + 10, top + h + 3)], fill=color, width=2)
+    draw.line([(x + w - 10, top + h), (x + w - 10, top + h + 3)], fill=color, width=2)
+    draw.line([(x + 3, top + h + 4), (x + w - 3, top + h + 4)], fill=color, width=2)
 
 
 def _empty(draw, theme, text, x, y, w, h):
