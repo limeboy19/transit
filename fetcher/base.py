@@ -91,14 +91,17 @@ class BaseFetcher(ABC):
 
     #: whether this agency supports "find nearest stop" in the admin UI
     supports_stop_search: bool = False
+    #: True if search is by name/text (no geocoding) rather than by coordinate
+    stop_search_by_name: bool = False
 
     @classmethod
     def find_stops(cls, lat: float, lon: float, limit: int = 8,
-                   api_key: str = "") -> "list[StopMatch]":
-        """Return nearest stops to a coordinate. Override per agency.
+                   api_key: str = "", mode: str = "", query: str = "") -> "list[StopMatch]":
+        """Return matching stops. Override per agency.
 
-        ``api_key`` is supplied for agencies whose stop search needs auth
-        (e.g. NYC bus). Default: unsupported.
+        Coordinate-based agencies use ``lat``/``lon``; name-based ones (NJT) use
+        the raw ``query``. ``api_key`` is for agencies whose search needs auth;
+        ``mode`` optionally filters to "bus"/"train". Default: unsupported.
         """
         return []
 

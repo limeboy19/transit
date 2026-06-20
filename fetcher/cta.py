@@ -54,7 +54,9 @@ class CTAFetcher(BaseFetcher):
 
     @classmethod
     def find_stops(cls, lat: float, lon: float, limit: int = 8,
-                   api_key: str = "") -> list[StopMatch]:
+                   api_key: str = "", mode: str = "", query: str = "") -> list[StopMatch]:
+        if mode == "bus":
+            return []  # CTA integration is trains ('L') only
         from geocode import haversine_mi
 
         rows = cls._load_stops()

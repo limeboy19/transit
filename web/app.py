@@ -152,6 +152,11 @@ ADMIN = """
         <div class="finder">
           <div class="row" style="gap:8px">
             <input type="text" id="find-{{ loop.index0 }}" placeholder="ZIP or address → find nearest stop">
+            <select id="findmode-{{ loop.index0 }}" style="flex:0 0 auto;width:auto">
+              <option value="">All</option>
+              <option value="train">🚆 Train</option>
+              <option value="bus">🚌 Bus</option>
+            </select>
             <button type="button" class="ghost" style="flex:0 0 auto"
                     onclick="findStops({{ loop.index0 }})">Find stop</button>
           </div>
@@ -206,10 +211,11 @@ function toggleEnabled(i, cb){
 async function findStops(idx){
   var type=document.querySelector('[name=feed-'+idx+'-type]').value;
   var q=document.getElementById('find-'+idx).value;
+  var mode=document.getElementById('findmode-'+idx).value;
   var box=document.getElementById('finds-'+idx);
   box.innerHTML='<span class="small">Searching…</span>';
   try{
-    var r=await fetch('/find_stops?type='+encodeURIComponent(type)+'&q='+encodeURIComponent(q));
+    var r=await fetch('/find_stops?type='+encodeURIComponent(type)+'&q='+encodeURIComponent(q)+'&mode='+encodeURIComponent(mode));
     var d=await r.json();
     if(d.error){box.innerHTML='<span class="small">'+d.error+'</span>';return;}
     if(!d.stops||!d.stops.length){box.innerHTML='<span class="small">No stops found near that location.</span>';return;}
@@ -245,8 +251,8 @@ DISPLAY = """
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }}</title>
 <style>
-  html,body{margin:0;height:100%;background:#111;display:flex;align-items:center;justify-content:center}
-  img{max-width:100%;max-height:100vh;image-rendering:auto}
+  html,body{margin:0;height:100%;background:#111;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  img{width:100vw;height:100vh;object-fit:contain;display:block}
 </style></head><body>
 <img id="d" src="{{ img_url }}&t={{ cb }}">
 <script>
@@ -405,12 +411,22 @@ def find_stops():
                           f"enter the stop id manually."}
     if not q:
         return {"error": "Enter a ZIP code or address."}
-    located = geocode(q)
-    if not located:
-        return {"error": "Couldn't find that location. Try a ZIP or a fuller address."}
-    lat, lon, label = located
+    mode = request.args.get("mode", "").lower().strip()
+    if mode not in ("", "bus", "train"):
+        mode = ""
+    key = _resolved_key_for(ftype)
+
     try:
-        stops = cls.find_stops(lat, lon, api_key=_resolved_key_for(ftype))
+        if getattr(cls, "stop_search_by_name", False):
+            # name/text search (e.g. NJT) — no geocoding
+            label = f'"{q}"'
+            stops = cls.find_stops(0.0, 0.0, api_key=key, mode=mode, query=q)
+        else:
+            located = geocode(q)
+            if not located:
+                return {"error": "Couldn't find that location. Try a ZIP or a fuller address."}
+            lat, lon, label = located
+            stops = cls.find_stops(lat, lon, api_key=key, mode=mode, query=q)
     except Exception as exc:  # noqa: BLE001
         return {"error": f"Stop lookup failed: {exc}"}
     return {

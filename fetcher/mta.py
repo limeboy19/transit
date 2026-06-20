@@ -46,6 +46,12 @@ GTFS_STATIC_URLS = [
 ]
 _STOPS_CACHE: list[dict] = []
 
+# All subway line-group feeds. A station shared by several lines (e.g. Queens
+# Plaza on E/M/R) appears in multiple feeds, and the stop-id prefix doesn't
+# reliably indicate which — so we query them all and match the stop. Each trip
+# lives in exactly one feed, so the union has no duplicates.
+ALL_SUBWAY_SUFFIXES = ["", "-ace", "-bdfm", "-g", "-jz", "-nqrw", "-l", "-si"]
+
 # stop-id first character -> feed suffix appended to FEED_BASE.
 FEED_BY_PREFIX = {
     "A": "-ace", "C": "-ace", "E": "-ace", "H": "-ace",
@@ -78,30 +84,31 @@ class MTAFetcher(BaseFetcher):
 
     @classmethod
     def find_stops(cls, lat: float, lon: float, limit: int = 8,
-                   api_key: str = "") -> list[StopMatch]:
+                   api_key: str = "", mode: str = "", query: str = "") -> list[StopMatch]:
         from geocode import haversine_mi
 
         cand: list[tuple[float, StopMatch]] = []
 
         # --- subway platforms (open static GTFS, direction-suffixed ids) ---
-        try:
-            for row in cls._load_stops():
-                sid = (row.get("stop_id") or "").strip()
-                if not (sid.endswith("N") or sid.endswith("S")):
-                    continue
-                try:
-                    d = haversine_mi(lat, lon, float(row["stop_lat"]), float(row["stop_lon"]))
-                except (KeyError, ValueError):
-                    continue
-                direction = "Uptown" if sid.endswith("N") else "Downtown"
-                cand.append((d, StopMatch(
-                    id=sid, name=f"{row.get('stop_name', '').strip()} · {direction}",
-                    detail=f"{d:.1f} mi", mode="train")))
-        except Exception as exc:  # noqa: BLE001
-            print(f"[mta] subway stop list failed: {exc}")
+        if mode in ("", "train"):
+            try:
+                for row in cls._load_stops():
+                    sid = (row.get("stop_id") or "").strip()
+                    if not (sid.endswith("N") or sid.endswith("S")):
+                        continue
+                    try:
+                        d = haversine_mi(lat, lon, float(row["stop_lat"]), float(row["stop_lon"]))
+                    except (KeyError, ValueError):
+                        continue
+                    direction = "Uptown" if sid.endswith("N") else "Downtown"
+                    cand.append((d, StopMatch(
+                        id=sid, name=f"{row.get('stop_name', '').strip()} · {direction}",
+                        detail=f"{d:.1f} mi", mode="train")))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[mta] subway stop list failed: {exc}")
 
         # --- bus stops (MTA Bus Time, needs the key) ---
-        if api_key:
+        if mode in ("", "bus") and api_key:
             try:
                 cand.extend(cls._find_bus_stops(lat, lon, api_key))
             except Exception as exc:  # noqa: BLE001
@@ -201,27 +208,42 @@ class MTAFetcher(BaseFetcher):
                 departures += self._fetch_bus(bid)
         return departures
 
-    def _fetch_subway(self, subway_ids: list[str]) -> list[Departure]:
-        # several stops may live in different line-group feeds — fetch each
-        # distinct (public) feed once and match all the stops it covers.
-        feeds_to_stops: dict[str, set[str]] = {}
-        for sid in subway_ids:
-            feeds_to_stops.setdefault(self._feed_url_for(sid), set()).add(sid)
+    def _subway_feed_urls(self) -> list[str]:
+        override = str(self.config.get("feed", "")).strip()
+        if override:
+            suffix = override if override.startswith("-") or override == "" else f"-{override}"
+            return [FEED_BASE + suffix]
+        return [FEED_BASE + s for s in ALL_SUBWAY_SUFFIXES]
 
-        names = self._stop_names() if len(subway_ids) > 1 else {}
+    def _fetch_subway(self, subway_ids: list[str]) -> list[Departure]:
+        # query every line-group feed and match our stops across all of them
+        # (a shared station's lines are spread across multiple feeds).
+        stop_set = set(subway_ids)
+        names = self._stop_names()  # needed for real terminal/destination names
         now = time.time()
         out: list[Departure] = []
-        for url, sids in feeds_to_stops.items():
-            resp = requests.get(url, timeout=self.timeout)
-            resp.raise_for_status()
+        for url in self._subway_feed_urls():
+            try:
+                resp = requests.get(url, timeout=self.timeout)
+                resp.raise_for_status()
+            except Exception as exc:  # noqa: BLE001 - one feed down ≠ total failure
+                print(f"[mta] feed fetch failed ({url.split('gtfs')[-1] or 'main'}): {exc}")
+                continue
             feed = gtfs_realtime_pb2.FeedMessage()
             feed.ParseFromString(resp.content)
             for entity in feed.entity:
                 if not entity.HasField("trip_update"):
                     continue
-                route_id = entity.trip_update.trip.route_id or "?"
-                for stu in entity.trip_update.stop_time_update:
-                    if stu.stop_id not in sids:
+                tu = entity.trip_update
+                route_id = tu.trip.route_id or "?"
+                # the trip's last scheduled stop is its terminal — that's the real
+                # destination (e.g. "Jamaica Center"), far better than N/S which
+                # only reads as Uptown/Downtown inside Manhattan.
+                terminal_id = tu.stop_time_update[-1].stop_id if tu.stop_time_update else ""
+                terminal = (names.get(terminal_id) or names.get(terminal_id[:-1])
+                            or DIRECTION_NAMES.get(terminal_id[-1:].upper(), ""))
+                for stu in tu.stop_time_update:
+                    if stu.stop_id not in stop_set:
                         continue
                     when = 0
                     if stu.HasField("arrival") and stu.arrival.time:
@@ -235,11 +257,11 @@ class MTAFetcher(BaseFetcher):
                         continue
                     out.append(Departure(
                         route=route_id,
-                        destination=DIRECTION_NAMES.get(stu.stop_id[-1].upper(), ""),
+                        destination=terminal,
                         minutes=minutes,
                         color=ROUTE_COLORS.get(route_id),
                         mode="train",
-                        stop_name=names.get(stu.stop_id, ""),
+                        stop_name=names.get(stu.stop_id) or names.get(stu.stop_id[:-1], ""),
                     ))
         return out
 

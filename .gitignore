@@ -12,3 +12,6 @@ config.json
 # Azure service principal creds (AZURE_* env vars) — never commit.
 .env
 *.env
+
+# NJ Transit daily token cache (auto-managed; respects the 10/day token cap)
+.njt_token.json
