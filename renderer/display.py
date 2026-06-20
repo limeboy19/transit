@@ -276,12 +276,12 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
     cy = y + h // 2
 
     # route badge (shared font across the board for consistent sizing)
-    badge_w, badge_h = 92, h - 18
+    badge_w, badge_h = 122, h - 18
     badge_color = _rgb(dep.color) if dep.color else _rgb(theme.accent)
     draw.rounded_rectangle([x + pad, y + 9, x + pad + badge_w, y + 9 + badge_h],
                            radius=10, fill=badge_color)
-    f_route = route_font or _fit_font(draw, dep.route, "bold", badge_w - 14,
-                                      min(40, badge_h - 4), 16)
+    f_route = route_font or _fit_font(draw, dep.route, "bold", badge_w - 16,
+                                      min(52, badge_h - 4), 16)
     draw.text((x + pad + badge_w // 2, cy), dep.route, font=f_route,
               fill=_contrast(badge_color), anchor="mm")
 
@@ -337,28 +337,30 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
 
 
 def _draw_bus_icon(draw, x, cy, color):
-    """Bus glyph (~32px) vertically centered at cy, left edge at x."""
-    w, h = 32, 24
+    """Bus glyph (~32px): boxy body, window strip, two round wheels (road vehicle)."""
+    w, h = 32, 22
     top = cy - h // 2
     draw.rounded_rectangle([x, top, x + w, top + h], radius=6, outline=color, width=3)
-    # window band
+    # window strip across the top
     draw.line([(x + 5, top + 8), (x + w - 5, top + 8)], fill=color, width=2)
-    # wheels
-    draw.ellipse([x + 6, top + h - 4, x + 12, top + h + 3], fill=color)
-    draw.ellipse([x + w - 12, top + h - 4, x + w - 6, top + h + 3], fill=color)
+    # two round wheels hanging below the body
+    r = 3
+    draw.ellipse([x + 6, top + h - 2, x + 6 + 2 * r, top + h - 2 + 2 * r], fill=color)
+    draw.ellipse([x + w - 6 - 2 * r, top + h - 2, x + w - 6, top + h - 2 + 2 * r], fill=color)
 
 
 def _draw_train_icon(draw, x, cy, color):
-    """Train/railcar glyph (~32px) vertically centered at cy."""
-    w, h = 32, 24
+    """Train glyph (~32px): rounded railcar, two windows, sitting on a rail (no wheels)."""
+    w, h = 32, 22
     top = cy - h // 2
-    draw.rounded_rectangle([x, top, x + w, top + h], radius=7, outline=color, width=3)
+    draw.rounded_rectangle([x, top, x + w, top + h], radius=9, outline=color, width=3)
     # two windows up top
-    draw.rectangle([x + 5, top + 5, x + w // 2 - 2, top + 14], outline=color, width=2)
-    draw.rectangle([x + w // 2 + 2, top + 5, x + w - 5, top + 14], outline=color, width=2)
-    # wheels
-    draw.ellipse([x + 6, top + h - 4, x + 12, top + h + 3], fill=color)
-    draw.ellipse([x + w - 12, top + h - 4, x + w - 6, top + h + 3], fill=color)
+    draw.rectangle([x + 6, top + 5, x + w // 2 - 2, top + 12], outline=color, width=2)
+    draw.rectangle([x + w // 2 + 2, top + 5, x + w - 6, top + 12], outline=color, width=2)
+    # short legs onto a rail line below (rail vehicle, not road)
+    draw.line([(x + 8, top + h), (x + 8, top + h + 3)], fill=color, width=2)
+    draw.line([(x + w - 8, top + h), (x + w - 8, top + h + 3)], fill=color, width=2)
+    draw.line([(x + 2, top + h + 4), (x + w - 2, top + h + 4)], fill=color, width=2)
 
 
 def _empty(draw, theme, text, x, y, w, h):
@@ -411,7 +413,7 @@ def _render_stacked(draw, results, theme, top, height):
         _empty(draw, theme, msg, 0, top, WIDTH, height)
         return
 
-    badge_font = _badge_font(draw, merged, 92, 40)
+    badge_font = _badge_font(draw, merged, 122, 52)
     show_stop = any(d.stop_name for d in merged)
     for i, dep in enumerate(merged):
         _draw_row(draw, dep, 0, top + i * row_h, WIDTH, row_h, theme, route_font=badge_font,
@@ -448,7 +450,7 @@ def _render_sections(draw, results, theme, top, height):
         n = max(1, min(len(result.departures), rows_h // 50))
         row_h = max(50, min(92, rows_h // n))
         shown = result.departures[:n]
-        badge_font = _badge_font(draw, shown, 92, 40)
+        badge_font = _badge_font(draw, shown, 122, 52)
         show_stop = any(d.stop_name for d in shown)
         for j, dep in enumerate(shown):
             _draw_row(draw, dep, 0, rows_top + j * row_h, WIDTH, row_h, theme,
