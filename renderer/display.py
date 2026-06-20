@@ -299,8 +299,9 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
     # gap after the badge equals the left margin (pad) so spacing is symmetric.
     dest_x = x + pad + badge_w + pad
     if dep.mode == "bus":
-        _draw_bus_icon(draw, dest_x, cy, _rgb(theme.ink))
-        dest_x += 34
+        _draw_bus_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 34
+    else:
+        _draw_train_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 34
     f_to = _font("regular", 18)
     f_dest = _font("bold", 34)
     content_right = x + w - pad - 170        # reserve room for the ETA on the right
@@ -343,6 +344,22 @@ def _draw_bus_icon(draw, x, cy, color):
     # wheels
     draw.ellipse([x + 4, top + h - 3, x + 9, top + h + 2], fill=color)
     draw.ellipse([x + w - 9, top + h - 3, x + w - 4, top + h + 2], fill=color)
+
+
+def _draw_train_icon(draw, x, cy, color):
+    """Tiny train/railcar glyph (~26px) vertically centered at cy."""
+    w, h = 24, 18
+    top = cy - h // 2
+    # body with a rounded top (railcar)
+    draw.rounded_rectangle([x, top, x + w, top + h], radius=5, outline=color, width=2)
+    # window band near the top
+    draw.line([(x + 4, top + 6), (x + w - 4, top + 6)], fill=color, width=2)
+    # two windows below the band
+    draw.rectangle([x + 4, top + 8, x + w // 2 - 1, top + h - 4], outline=color, width=1)
+    draw.rectangle([x + w // 2 + 1, top + 8, x + w - 4, top + h - 4], outline=color, width=1)
+    # little wheels/feet
+    draw.line([(x + 5, top + h + 1), (x + 9, top + h + 1)], fill=color, width=2)
+    draw.line([(x + w - 9, top + h + 1), (x + w - 5, top + h + 1)], fill=color, width=2)
 
 
 def _empty(draw, theme, text, x, y, w, h):
@@ -396,10 +413,10 @@ def _render_stacked(draw, results, theme, top, height):
         return
 
     badge_font = _badge_font(draw, merged, 92, 40)
-    multi_stop = len({d.stop_name for d in merged if d.stop_name}) > 1
+    show_stop = any(d.stop_name for d in merged)
     for i, dep in enumerate(merged):
         _draw_row(draw, dep, 0, top + i * row_h, WIDTH, row_h, theme, route_font=badge_font,
-                  alt=(i % 2 == 1), show_line=True, show_stop=multi_stop)
+                  alt=(i % 2 == 1), show_line=True, show_stop=show_stop)
 
 
 def _render_sections(draw, results, theme, top, height):
@@ -433,11 +450,11 @@ def _render_sections(draw, results, theme, top, height):
         row_h = max(50, min(92, rows_h // n))
         shown = result.departures[:n]
         badge_font = _badge_font(draw, shown, 92, 40)
-        multi_stop = len({d.stop_name for d in shown if d.stop_name}) > 1
+        show_stop = any(d.stop_name for d in shown)
         for j, dep in enumerate(shown):
             _draw_row(draw, dep, 0, rows_top + j * row_h, WIDTH, row_h, theme,
                       route_font=badge_font, alt=(j % 2 == 1), show_line=False,
-                      show_stop=multi_stop)
+                      show_stop=show_stop)
 
 
 # ----------------------------------------------------------------- Display ---

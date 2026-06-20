@@ -20,6 +20,9 @@ import requests
 from .base import BaseFetcher, Departure, StopMatch
 
 ENDPOINT = "http://lapi.transitchicago.com/api/1.0/ttarrivals.aspx"
+# CTA Bus Tracker (separate API + separate key from Train Tracker).
+BUS_ENDPOINT = "https://www.ctabustracker.com/bustime/api/v2/getpredictions"
+CTA_BUS_COLOR = "#2E6E8E"
 # City of Chicago open dataset: list of all 'L' stops with coordinates.
 STOPS_DATASET = "https://data.cityofchicago.org/resource/8pix-ypme.json"
 _STOPS_CACHE: list[dict] = []
@@ -99,62 +102,111 @@ class CTAFetcher(BaseFetcher):
             _STOPS_CACHE = resp.json()
         return _STOPS_CACHE
 
-    def _params(self) -> dict:
-        # request extra so we have enough to merge across stops before trimming
+    @staticmethod
+    def _classify(raw: str) -> tuple[str, str]:
+        """('train'|'bus', stop_id). Train ids are 5 digits starting 3/4 (L
+        platform/station). Anything else is a bus stop. 'bus:'/'train:' prefixes
+        force the choice if the heuristic ever guesses wrong."""
+        s = raw.strip()
+        low = s.lower()
+        if low.startswith("bus:"):
+            return "bus", s[4:].strip()
+        if low.startswith("train:"):
+            return "train", s[6:].strip()
+        return ("train" if (len(s) == 5 and s[0] in "34") else "bus"), s
+
+    def fetch(self) -> list[Departure]:
+        if not self.stop_ids:
+            raise ValueError("CTA feed requires a stop_id (L station or bus stop)")
+        train_ids, bus_ids = [], []
+        for raw in self.stop_ids:
+            kind, sid = self._classify(raw)
+            (train_ids if kind == "train" else bus_ids).append(sid)
+
+        departures: list[Departure] = []
+        if train_ids:
+            if not self.api_key:
+                raise ValueError("CTA L trains need an api_key (Train Tracker)")
+            departures += self._fetch_trains(train_ids)
+        if bus_ids:
+            bus_key = str(self.config.get("bus_key", "")).strip()
+            if not bus_key:
+                raise ValueError("CTA bus stops need a 'bus_key' (CTA Bus Tracker API key)")
+            departures += self._fetch_buses(bus_ids, bus_key)
+        return departures
+
+    def _params(self, ids: list[str]) -> dict:
         params = {"key": self.api_key, "max": max(20, self.limit * 4), "outputType": "XML"}
         mapids, stpids = [], []
-        for sid in self.stop_ids or [self.stop_id]:
+        for sid in ids:
             if len(sid) == 5 and sid.startswith("4"):
                 mapids.append(sid)   # station map id (both directions)
             elif sid:
                 stpids.append(sid)   # platform-level stop id
         if mapids:
-            params["mapid"] = mapids  # requests repeats the param: mapid=a&mapid=b
+            params["mapid"] = mapids
         if stpids:
             params["stpid"] = stpids
         return params
 
-    def fetch(self) -> list[Departure]:
-        if not self.api_key:
-            raise ValueError("CTA feed requires an api_key")
-        if not self.stop_id:
-            raise ValueError("CTA feed requires a stop_id (mapid or stpid)")
-
-        resp = requests.get(ENDPOINT, params=self._params(), timeout=self.timeout)
+    def _fetch_trains(self, train_ids: list[str]) -> list[Departure]:
+        resp = requests.get(ENDPOINT, params=self._params(train_ids), timeout=self.timeout)
         resp.raise_for_status()
         root = ElementTree.fromstring(resp.content)
-
         err_code = (root.findtext("errCd") or "0").strip()
         if err_code != "0":
-            raise RuntimeError(
-                f"CTA API error {err_code}: {root.findtext('errNm') or 'unknown'}"
-            )
+            raise RuntimeError(f"CTA API error {err_code}: {root.findtext('errNm') or 'unknown'}")
 
-        departures: list[Departure] = []
+        out: list[Departure] = []
         for eta in root.findall("eta"):
             rt = (eta.findtext("rt") or "").strip()
-            dest = (eta.findtext("destNm") or "").strip()
-            sta = (eta.findtext("staNm") or "").strip()
-            is_approaching = (eta.findtext("isApp") or "0").strip() == "1"
-            is_delayed = (eta.findtext("isDly") or "0").strip() == "1"
-
             minutes = self._minutes(eta)
             if minutes is None:
                 continue
-            if is_approaching:
+            if (eta.findtext("isApp") or "0").strip() == "1":
                 minutes = 0
+            out.append(Departure(
+                route=ROUTE_NAMES.get(rt, rt),
+                destination=(eta.findtext("destNm") or "").strip(),
+                minutes=minutes,
+                color=ROUTE_COLORS.get(rt),
+                delayed=(eta.findtext("isDly") or "0").strip() == "1",
+                mode="train",
+                stop_name=(eta.findtext("staNm") or "").strip(),
+            ))
+        return out
 
-            departures.append(
-                Departure(
-                    route=ROUTE_NAMES.get(rt, rt),
-                    destination=dest,
-                    minutes=minutes,
-                    color=ROUTE_COLORS.get(rt),
-                    delayed=is_delayed,
-                    stop_name=sta,
-                )
-            )
-        return departures
+    def _fetch_buses(self, bus_ids: list[str], bus_key: str) -> list[Departure]:
+        resp = requests.get(BUS_ENDPOINT, timeout=self.timeout, params={
+            "key": bus_key, "stpid": ",".join(bus_ids), "format": "json",
+        })
+        resp.raise_for_status()
+        data = resp.json().get("bustime-response", {}) or {}
+        out: list[Departure] = []
+        for prd in data.get("prd", []) or []:
+            cd = str(prd.get("prdctdn", "")).strip().upper()
+            delayed = cd == "DLY"
+            if cd in ("DUE", "DLY"):
+                minutes = 0
+            else:
+                try:
+                    minutes = int(cd)
+                except ValueError:
+                    continue
+            out.append(Departure(
+                route=str(prd.get("rt", "")).strip(),
+                destination=str(prd.get("des", "")).strip(),
+                minutes=minutes,
+                color=CTA_BUS_COLOR,
+                delayed=delayed,
+                mode="bus",
+                stop_name=str(prd.get("stpnm", "")).strip(),
+            ))
+        # only surface an error if we got nothing usable
+        if not out and data.get("error"):
+            raise RuntimeError("CTA Bus: " + "; ".join(
+                e.get("msg", "") for e in data["error"]))
+        return out
 
     @staticmethod
     def _minutes(eta: ElementTree.Element) -> int | None:
