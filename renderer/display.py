@@ -61,6 +61,11 @@ _FONT_CANDIDATES = {
 }
 _FONT_CACHE: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
 
+# Font Awesome (bundled) for crisp bus/train glyphs in any theme color.
+ICON_FONT_PATH = Path(__file__).resolve().parent.parent / "fonts" / "fa-solid-900.ttf"
+ICON_BUS = ""     # fa-bus
+ICON_TRAIN = ""   # fa-train-subway
+
 
 # ---------------------------------------------------------------- helpers ----
 
@@ -84,6 +89,18 @@ def _font(weight: str, size: int) -> ImageFont.FreeTypeFont:
                 break
             except OSError:
                 continue
+    _FONT_CACHE[key] = font  # type: ignore[assignment]
+    return font  # type: ignore[return-value]
+
+
+def _icon_font(size: int) -> ImageFont.FreeTypeFont:
+    key = ("__icon__", size)
+    if key in _FONT_CACHE:
+        return _FONT_CACHE[key]
+    try:
+        font = ImageFont.truetype(str(ICON_FONT_PATH), size)
+    except OSError:
+        font = ImageFont.load_default()
     _FONT_CACHE[key] = font  # type: ignore[assignment]
     return font  # type: ignore[return-value]
 
@@ -298,10 +315,10 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
     # one vertically-centered line: badge | to {dest}  {stop label} ......... ETA
     # gap after the badge equals the left margin (pad) so spacing is symmetric.
     dest_x = x + pad + badge_w + pad
-    if dep.mode == "bus":
-        _draw_bus_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 50
-    else:
-        _draw_train_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 50
+    icon_char = ICON_BUS if dep.mode == "bus" else ICON_TRAIN
+    ic_font = _icon_font(36)
+    draw.text((dest_x, cy), icon_char, font=ic_font, fill=_rgb(theme.muted), anchor="lm")
+    dest_x += _tw(draw, icon_char, ic_font) + 14
     f_to = _font("regular", 18)
     f_dest = _font("bold", 34)
     content_right = x + w - pad - 170        # reserve room for the ETA on the right
@@ -336,31 +353,6 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
     draw.text((x + w - pad, cy), eta, font=f_eta, fill=eta_color, anchor="rm")
 
 
-def _draw_bus_icon(draw, x, cy, color):
-    """Bus glyph (~40px wide): boxy body, window strip, two round wheels (road vehicle)."""
-    w, h = 40, 24
-    top = cy - h // 2
-    draw.rounded_rectangle([x, top, x + w, top + h], radius=6, outline=color, width=3)
-    # window strip across the top
-    draw.line([(x + 6, top + 9), (x + w - 6, top + 9)], fill=color, width=2)
-    # two round wheels hanging below the body
-    r = 3
-    draw.ellipse([x + 9, top + h - 2, x + 9 + 2 * r, top + h - 2 + 2 * r], fill=color)
-    draw.ellipse([x + w - 9 - 2 * r, top + h - 2, x + w - 9, top + h - 2 + 2 * r], fill=color)
-
-
-def _draw_train_icon(draw, x, cy, color):
-    """Train glyph (~40px wide): rounded railcar, two windows, sitting on a rail (no wheels)."""
-    w, h = 40, 24
-    top = cy - h // 2
-    draw.rounded_rectangle([x, top, x + w, top + h], radius=10, outline=color, width=3)
-    # two windows up top
-    draw.rectangle([x + 7, top + 5, x + w // 2 - 3, top + 14], outline=color, width=2)
-    draw.rectangle([x + w // 2 + 3, top + 5, x + w - 7, top + 14], outline=color, width=2)
-    # short legs onto a rail line below (rail vehicle, not road)
-    draw.line([(x + 10, top + h), (x + 10, top + h + 3)], fill=color, width=2)
-    draw.line([(x + w - 10, top + h), (x + w - 10, top + h + 3)], fill=color, width=2)
-    draw.line([(x + 3, top + h + 4), (x + w - 3, top + h + 4)], fill=color, width=2)
 
 
 def _empty(draw, theme, text, x, y, w, h):
