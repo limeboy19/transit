@@ -130,9 +130,11 @@ class CTAFetcher(BaseFetcher):
             departures += self._fetch_trains(train_ids)
         if bus_ids:
             bus_key = str(self.config.get("bus_key", "")).strip()
-            if not bus_key:
+            if bus_key:
+                departures += self._fetch_buses(bus_ids, bus_key)
+            elif not train_ids:
                 raise ValueError("CTA bus stops need a 'bus_key' (CTA Bus Tracker API key)")
-            departures += self._fetch_buses(bus_ids, bus_key)
+            # else: have trains but no bus key yet — skip buses so trains still show
         return departures
 
     def _params(self, ids: list[str]) -> dict:

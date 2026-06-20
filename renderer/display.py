@@ -299,18 +299,20 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
     # gap after the badge equals the left margin (pad) so spacing is symmetric.
     dest_x = x + pad + badge_w + pad
     if dep.mode == "bus":
-        _draw_bus_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 34
+        _draw_bus_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 42
     else:
-        _draw_train_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 34
+        _draw_train_icon(draw, dest_x, cy, _rgb(theme.muted)); dest_x += 42
     f_to = _font("regular", 18)
     f_dest = _font("bold", 34)
     content_right = x + w - pad - 170        # reserve room for the ETA on the right
     to_w = _tw(draw, "to ", f_to)
 
-    if sub_text:  # split the room: destination gets ~half, the stop label the rest
-        dest_budget = max(110, int((content_right - dest_x) * 0.5)) - to_w
+    avail = content_right - dest_x - to_w
+    if sub_text:  # destination gets priority; the stop label takes the remainder
+        stop_reserve = min(120, max(70, int(avail * 0.38)))
+        dest_budget = avail - stop_reserve - 12
     else:
-        dest_budget = (content_right - dest_x) - to_w
+        dest_budget = avail
     draw.text((dest_x, cy), "to", font=f_to, fill=_rgb(theme.muted), anchor="lm")
     dest = _truncate(draw, dep.destination or "—", f_dest, max(20, dest_budget))
     draw.text((dest_x + to_w, cy), dest, font=f_dest, fill=_rgb(theme.ink), anchor="lm")
@@ -335,31 +337,28 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
 
 
 def _draw_bus_icon(draw, x, cy, color):
-    """Tiny bus glyph (~26px) vertically centered at cy, left edge at x."""
-    w, h = 26, 18
+    """Bus glyph (~32px) vertically centered at cy, left edge at x."""
+    w, h = 32, 24
     top = cy - h // 2
-    draw.rounded_rectangle([x, top, x + w, top + h], radius=4, outline=color, width=2)
-    # windows
-    draw.line([(x + 4, top + 6), (x + w - 4, top + 6)], fill=color, width=2)
+    draw.rounded_rectangle([x, top, x + w, top + h], radius=6, outline=color, width=3)
+    # window band
+    draw.line([(x + 5, top + 8), (x + w - 5, top + 8)], fill=color, width=2)
     # wheels
-    draw.ellipse([x + 4, top + h - 3, x + 9, top + h + 2], fill=color)
-    draw.ellipse([x + w - 9, top + h - 3, x + w - 4, top + h + 2], fill=color)
+    draw.ellipse([x + 6, top + h - 4, x + 12, top + h + 3], fill=color)
+    draw.ellipse([x + w - 12, top + h - 4, x + w - 6, top + h + 3], fill=color)
 
 
 def _draw_train_icon(draw, x, cy, color):
-    """Tiny train/railcar glyph (~26px) vertically centered at cy."""
-    w, h = 24, 18
+    """Train/railcar glyph (~32px) vertically centered at cy."""
+    w, h = 32, 24
     top = cy - h // 2
-    # body with a rounded top (railcar)
-    draw.rounded_rectangle([x, top, x + w, top + h], radius=5, outline=color, width=2)
-    # window band near the top
-    draw.line([(x + 4, top + 6), (x + w - 4, top + 6)], fill=color, width=2)
-    # two windows below the band
-    draw.rectangle([x + 4, top + 8, x + w // 2 - 1, top + h - 4], outline=color, width=1)
-    draw.rectangle([x + w // 2 + 1, top + 8, x + w - 4, top + h - 4], outline=color, width=1)
-    # little wheels/feet
-    draw.line([(x + 5, top + h + 1), (x + 9, top + h + 1)], fill=color, width=2)
-    draw.line([(x + w - 9, top + h + 1), (x + w - 5, top + h + 1)], fill=color, width=2)
+    draw.rounded_rectangle([x, top, x + w, top + h], radius=7, outline=color, width=3)
+    # two windows up top
+    draw.rectangle([x + 5, top + 5, x + w // 2 - 2, top + 14], outline=color, width=2)
+    draw.rectangle([x + w // 2 + 2, top + 5, x + w - 5, top + 14], outline=color, width=2)
+    # wheels
+    draw.ellipse([x + 6, top + h - 4, x + 12, top + h + 3], fill=color)
+    draw.ellipse([x + w - 12, top + h - 4, x + w - 6, top + h + 3], fill=color)
 
 
 def _empty(draw, theme, text, x, y, w, h):
