@@ -2,7 +2,7 @@
   "key_vault_url": "https://kv-emil.vault.azure.net/",
   "vars": { "cta_key": "", "mta_key": "", "njt_key": "", "cta_bus_key": "" },
   "refresh_seconds": 60,
-  "off_hours": "",
+  "off_hours": "01:00-05:00",
   "feeds": [
     {
       "type": "cta",
