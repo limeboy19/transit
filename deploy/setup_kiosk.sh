@@ -68,10 +68,11 @@ EOF
 echo ">> disabling screen blanking (always-on display)"
 sudo raspi-config nonint do_blanking 1 || echo "   (raspi-config blanking toggle skipped; non-fatal)"
 
-echo ">> installing auto-update cron (pull every 5 min)"
-chmod +x "$APP_DIR/deploy/autoupdate.sh"
-( crontab -l 2>/dev/null | grep -v 'deploy/autoupdate.sh' ; \
-  echo "*/5 * * * * $APP_DIR/deploy/autoupdate.sh >> $HOME/autoupdate.log 2>&1" ) | crontab -
+echo ">> installing cron (hourly auto-update + per-minute screen schedule)"
+chmod +x "$APP_DIR/deploy/autoupdate.sh" "$APP_DIR/deploy/screen_schedule.sh"
+( crontab -l 2>/dev/null | grep -v -e 'deploy/autoupdate.sh' -e 'deploy/screen_schedule.sh' ; \
+  echo "0 * * * * $APP_DIR/deploy/autoupdate.sh >> $HOME/autoupdate.log 2>&1" ; \
+  echo "* * * * * $APP_DIR/deploy/screen_schedule.sh" ) | crontab -
 
 echo
 echo ">> kiosk setup complete. Reboot to apply:  sudo reboot"

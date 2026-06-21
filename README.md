@@ -1,229 +1,201 @@
 # Transit Display
 
-A config-driven Raspberry Pi departure board. It pulls real-time transit
-departures from one or more agency APIs and renders them to a Pimoroni **Inky
-Impression 7.3"** e-ink display (800×480, 6/7-color), refreshing every 60s.
+A config-driven **Raspberry Pi departure board**. It pulls real-time transit
+departures from one or more agency APIs and renders a clean, full-color "what's
+next" board — trains and buses merged, soonest-first — on a **Raspberry Pi 5 +
+official Raspberry Pi Touch Display 2** (7" LCD touchscreen).
 
-On a non-Pi machine it skips the hardware and writes `preview.png` instead, so
-you can iterate on layout locally. A small Flask UI (`:5000`) lets you toggle
-feeds, edit stop IDs / API keys, and watch a live preview.
+The Pi runs the board fullscreen in a Chromium **kiosk**; a small Flask app
+serves both the board and an admin page. On any non-Pi machine the same app
+runs and renders to `preview.png` / the browser, so you can build and preview
+the layout on your laptop.
+
+**Highlights**
+- 🚆🚌 **Multi-agency**: CTA (L trains **+ buses**), MTA (subway **+ buses**),
+  NJ Transit rail — mixed and merged on one board.
+- 🎨 **Per-city theming**: Chicago-flag (stars) for CTA, NYC tricolor flag for
+  MTA, with correct timezone clocks (CST/EST), weather widget, route badges in
+  line colors, bus/train icons, and per-row stop labels.
+- 🗂️ **Many devices, one repo**: each friend's Pi loads its own
+  `devices/<id>.json` — change a deployed board's stops by editing that file
+  and pushing (no SSH).
+- 🔐 **Secrets in Azure Key Vault**: API keys never touch git or the device's
+  config; the config only holds `${...}` references.
+- 🔄 **Self-managing**: auto-starts on boot, auto-respawns, and pulls new code
+  from git every few minutes.
 
 ```
 transit-display/
-├── main.py              # fetch → render → sleep loop (+ web UI thread)
-├── appconfig.py         # shared config.json load/save
-├── config.json          # which feeds are active, stop ids, keys
+├── main.py              # fetch → render → sleep loop (+ Flask thread)
+├── appconfig.py         # config load/save (local config.json OR devices/<id>.json)
+├── config.example.json  # template; seeds a local config.json for standalone use
 ├── fetcher/
-│   ├── base.py          # BaseFetcher + Departure/FeedResult
-│   ├── cta.py           # Chicago CTA Train Tracker (REST/XML)
-│   ├── mta.py           # NYC Subway (GTFS-RT protobuf)
-│   └── njt.py           # NJ Transit (GTFS-RT protobuf, stub)
+│   ├── base.py          # BaseFetcher + Departure / FeedResult / StopMatch
+│   ├── cta.py           # Chicago: Train Tracker (XML) + Bus Tracker (JSON)
+│   ├── mta.py           # NYC: subway GTFS-RT + bus via MTA Bus Time (SIRI)
+│   └── njt.py           # NJ Transit Rail Data API (token-based)
 ├── renderer/
-│   └── display.py       # Inky on a Pi, preview.png otherwise
-├── web/
-│   └── app.py           # Flask config UI + live preview
+│   ├── display.py       # builds the 800×480 board image (PNG / browser)
+│   └── themes.py        # per-agency colors, flags, clocks
+├── web/app.py           # Flask: admin (/) + fullscreen board (/display/<n>)
+├── weather.py           # ZIP → weather (free, keyless)
+├── geocode.py           # ZIP/address → lat/lon (stop search)
+├── secrets_azure.py     # Azure Key Vault resolver for ${...}
+├── devices/             # per-device configs (advait.json, example.json, …)
 ├── deploy/
+│   ├── setup_kiosk.sh   # one-command Pi setup (kiosk + cron + service + device id)
 │   ├── autoupdate.sh    # git pull + restart-if-changed
-│   └── crontab.txt      # 5-min auto-update cron line
+│   └── PI_SETUP.md      # flashing + first-boot guide
+├── fonts/fa-solid-900.ttf   # Font Awesome (bus/train glyphs)
 ├── transit.service      # systemd unit
-└── requirements.txt
+├── requirements.txt
+└── requirements-azure.txt   # Key Vault deps (optional)
 ```
 
-## Local development (no Pi)
+## Local development
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python3 main.py --once                 # render one frame to preview.png and exit
-TRANSIT_PORT=8080 python3 main.py      # loop + admin UI at http://localhost:8080
+python3 main.py --once            # render one frame to preview.png and exit
+TRANSIT_PORT=8080 python3 main.py # loop + admin at http://localhost:8080
 ```
 
-Not on a Pi? The renderer detects this (via `/proc/device-tree/model`), skips
-the `inky` import, and writes `preview.png`.
+> macOS owns port 5000 (AirPlay), so use `TRANSIT_PORT=8080` locally. On the Pi,
+> leave the default 5000.
 
-> macOS owns port 5000 (AirPlay), so use `TRANSIT_PORT=8080` (or `--port 8080`)
-> locally. On the Pi, leave the default 5000.
-
-### The two pages (both testable in a browser)
-- **`/` — admin.** Toggle feeds, set stop IDs / API keys, pick layout
-  (sections vs stacked), theme, and weather ZIP. Has a live preview, a
-  **6-color panel** preview (real dithering), and **sample-data** buttons
-  (CTA/MTA/stacked) so you can QA layout with **no API keys**.
-- **`/display` — the tracker.** Fullscreen, auto-refreshing — exactly what the
-  e-ink panel shows. Open it on any screen/monitor.
-
-### Render sample data from the CLI (no keys, no server)
-```bash
-python3 dev_preview.py                 # CTA sections -> preview.png
-python3 dev_preview.py --theme mta     # NYC subway
-python3 dev_preview.py --stacked       # merged chronological list
-python3 dev_preview.py --all           # one PNG per theme + stacked
-python3 dev_preview.py --dither        # simulate the real 6-color panel
-```
+### The two pages
+- **`/` — admin.** Add/toggle feeds, set stop IDs and weather ZIP per board,
+  and search for stops by ZIP/address ("Find stop", with a Train/Bus filter).
+  Shows a live preview per display.
+- **`/display/<n>` — the board.** Fullscreen, auto-refreshing — this is what the
+  kiosk shows on the Pi. `n` is the feed index (`/display/0` = first feed).
 
 ## Configuration
 
-Edit `config.json` directly or use the web UI. Each feed:
-
-```json
-{ "type": "cta", "enabled": true, "stop_id": "40380", "api_key": "xxx", "label": "Chicago L" }
-```
-
-- `type` — `cta`, `mta`, or `njt`
-- `enabled` — show this feed (sections are laid out only for enabled feeds)
-- `stop_id` — see per-agency notes below
-- `api_key` — agency API key / token
-- `label` — section header text
-- optional: `limit` (rows, default 5), `timeout` (seconds)
-
-Top-level:
-- `title` — header title; blank uses the agency name (e.g. "Chicago Transit")
-- `refresh_seconds` — min 15
-- `display.mode` — `"sections"` (one labeled block per stop) or `"stacked"`
-  (all stops merged into one chronological "what's next" list, MTA-style)
-- `display.theme` — `""` (auto, match first feed) or force `cta`/`mta`/`njt`
-- `weather.enabled` + `weather.zip` — show a weather widget in the header
-  (US ZIP; uses free, keyless zippopotam.us + open-meteo)
-
-### Themes
-Each agency has its own colors. **CTA** uses the Chicago-flag motif (sky-blue
-accent + four red six-pointed stars). **MTA** uses subway navy with line-color
-bullets. **NJT** uses NJ Transit blue. Route badges are colored per line.
-
-> Note: the panel is **6-color** (no orange/brown). The RGB `preview.png` is
-> optimistic — use the **6-color panel** preview link (or `--dither`) to see
-> the real dithered output. Light header tints and brown/orange badges dither
-> noticeably; pure-white backgrounds and primary-color badges render cleanest.
-
-### CTA (Chicago)
-- Get a key: <https://www.transitchicago.com/developers/traintracker/>
-- `stop_id`: a 5-digit **map id** (e.g. `40380`, both directions) or a
-  platform-level **stop id**. We auto-detect which to use.
-
-### MTA (NYC Subway)
-- Feeds are public (no key needed as of 2023). Set `api_key` only if you have
-  one — it's sent as `x-api-key`.
-- `stop_id`: a GTFS stop id **with direction suffix**, e.g. `R31N`
-  (northbound) / `R31S` (southbound). The correct line-group feed is chosen
-  from the first letter; override with a `"feed"` key (e.g. `"nqrw"`) if needed.
-- Stop ids: <http://web.mta.info/developers/data/nyct/subway/google_transit.zip> (`stops.txt`).
-
-### NJ Transit
-- Stub. NJ Transit requires a token from <https://developer.njtransit.com/>.
-  Set `feed_url` (the GTFS-RT trip-updates endpoint) and `api_key` (token) in
-  the feed config; adjust the auth header in `fetcher/njt.py` to match your
-  data product. Until configured it shows a friendly error on screen.
-
-## API keys & secrets
-
-These transit keys are low-sensitivity, but you still don't want them in git.
-The setup keeps them safe with zero cloud infrastructure:
-
-- **`config.json` is git-ignored.** The repo ships `config.example.json` as a
-  template; on first run the app copies it to `config.json`, which stays local.
-- So your keys are **never committed**, and the auto-update `git reset --hard`
-  **updates code only** — it never touches your `config.json`.
-
-Declare each value **once** in a top-level `vars` block and reference it as
-`${name}` from any feed — so reusing one key across multiple feeds (e.g. a CTA
-train stop + a CTA bus stop) means editing it in a single place:
+A config is JSON with a top level and a list of `feeds` (each feed = one board):
 
 ```json
 {
-  "vars": { "cta_key": "your-key", "mta_key": "", "njt_key": "" },
+  "key_vault_url": "https://kv-emil.vault.azure.net/",
+  "vars": { "cta_key": "", "mta_key": "", "njt_key": "", "cta_bus_key": "" },
+  "refresh_seconds": 60,
   "feeds": [
-    { "type": "cta", "api_key": "${cta_key}", "stop_id": "40380", ... },
-    { "type": "cta", "api_key": "${cta_key}", "stop_id": "41450", ... }
+    {
+      "type": "cta",
+      "enabled": true,
+      "label": "Advait",
+      "stop_id": "40380, 6034, 15350",
+      "api_key": "${cta_key}",
+      "bus_key": "${cta_bus_key}",
+      "zip": "60607",
+      "refresh_seconds": 60
+    }
   ]
 }
 ```
 
-Resolution order for `${name}`: the `vars` block first, then an **environment
-variable** of the same name, otherwise left as-is. So you can keep keys out of
-the file entirely by leaving `vars` empty and defining the value in the systemd
-unit instead:
+Per feed: `type` (`cta`/`mta`/`njt`), `enabled`, `label`, `stop_id`
+(comma-separated for multiple stops, merged + trimmed to the soonest few),
+`api_key`, `zip` (weather; blank = no weather), `refresh_seconds`, plus
+`bus_key` for CTA. The theme + timezone come automatically from `type`.
 
-```ini
-Environment=cta_key=your-key-here
+### CTA (Chicago) — trains **and** buses
+- **Train Tracker** key (`api_key`): <https://www.transitchicago.com/developers/traintracker/>
+- **Bus Tracker** key (`bus_key`, *separate signup*): <https://www.transitchicago.com/developers/bustracker/>
+- Stop IDs: L stations are 5-digit `4xxxx` (map id) or `3xxxx` (stop id); bus
+  stops are anything else. The fetcher auto-splits train vs bus stops (use a
+  `bus:`/`train:` prefix to force it). Use the admin "Find stop" to look them up.
+
+### MTA (NYC) — subway **and** buses
+- Subway GTFS-RT is **public** (no key). Buses use **MTA Bus Time** — put that
+  key in `api_key`. Stop search and arrivals both use it.
+- Stop IDs: subway is a GTFS id with direction suffix (`R31N`/`R31S`); bus stops
+  are `MTA_#####` or numeric. Shared stations are matched across all line feeds.
+
+### NJ Transit — rail
+- Uses the **Rail Data API** (token model): `api_key` is `"username:password"`
+  (your NJ Transit *API* credentials from <https://developer.njtransit.com/>,
+  not your portal login). The app caches the daily token automatically.
+- `stop_id`: 2-character station code(s) (e.g. `NP` = Newark Penn). Use the
+  admin "Find stop" to search station names.
+
+## Per-device configs (multi-device)
+
+Each physical device loads its **own** config from git, selected by
+`TRANSIT_DEVICE` in that Pi's `.env`:
+
+```
+devices/advait.json   ← Advait's Pi (TRANSIT_DEVICE=advait)
+devices/sam.json      ← Sam's Pi    (TRANSIT_DEVICE=sam)
 ```
 
-`${...}` works in any string field (keys, stop IDs, labels), and the reference
-stays in the file/admin UI — only the live fetch sees the resolved value.
+These files are safe to commit — they hold **no secrets** (keys resolve from
+Key Vault via `${...}`). So you **change a deployed board's stops by editing its
+file and pushing**; the Pi's auto-update pulls it within minutes. See
+[`devices/README.md`](devices/README.md) to add a friend.
 
-CTA keys are issued instantly; NJ Transit's developer approval takes ~5
-business days, so leave the NJT feed disabled until your token arrives.
+Without `TRANSIT_DEVICE`, the app uses a local `config.json` (seeded from
+`config.example.json`) — handy for standalone/dev use.
 
-### Azure Key Vault (keeps keys fully out of git)
-Set a vault URL (admin UI → Secrets, or `key_vault_url` in config / the
-`AZURE_KEYVAULT_URL` env var) and `${name}` references resolve from the vault.
-Resolution order is **vars → env var → Key Vault**, so leaving a `vars` entry
-blank makes it fall through to the vault.
+## Secrets — `${...}` resolution
 
-Add the secrets (names use hyphens — `${cta_key}` → secret `cta-key`):
+Reference secrets as `${name}` in any string field. Resolution order:
+**`vars` block → environment variable → Azure Key Vault** (then left as-is).
+Leaving a `vars` entry blank makes it fall through to the vault, so **no key
+ever lives in git or the config**.
+
+### Azure Key Vault
+Set `key_vault_url` (or the `AZURE_KEYVAULT_URL` env var). `${cta_key}` maps to
+the vault secret `cta-key` (underscores → hyphens). Add secrets:
 ```bash
-az keyvault secret set --vault-name kv-emil --name cta-key --value "<cta key>"
-az keyvault secret set --vault-name kv-emil --name mta-key --value "<bus time key>"
+az keyvault secret set --vault-name kv-emil --name cta-key     --value "<train key>"
+az keyvault secret set --vault-name kv-emil --name cta-bus-key --value "<bus key>"
+az keyvault secret set --vault-name kv-emil --name mta-key     --value "<bus time key>"
+az keyvault secret set --vault-name kv-emil --name njt-key     --value "<user>:<pass>"
 ```
+Auth is `DefaultAzureCredential`. On the Pi, a read-only **service principal**
+(`Key Vault Secrets User`) supplies `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
+`AZURE_CLIENT_SECRET` via the gitignored `.env`. Install the deps with
+`pip install -r requirements-azure.txt`.
 
-Networking: Key Vault is **always** Entra-authenticated (no anonymous access),
-so "public but protected by Entra" = Public network access **Enabled** +
-Permission model **Azure RBAC**. Grant roles:
+## Deploy on the Pi
+
+Full first-boot walkthrough (flashing, WiFi, SSH): [`deploy/PI_SETUP.md`](deploy/PI_SETUP.md).
+In short, on a Pi 5 running Raspberry Pi OS (desktop) with the Touch Display 2:
+
 ```bash
-VAULT=$(az keyvault show --name kv-emil --query id -o tsv)
-# you, for local dev:
-az role assignment create --assignee <you> --role "Key Vault Secrets Officer" --scope $VAULT
-# the device (read-only) via a service principal:
-az ad sp create-for-rbac --name transitpi-display
-az role assignment create --assignee <appId> --role "Key Vault Secrets User" --scope $VAULT
+sudo apt install -y git python3-venv
+git clone <repo-url> ~/transit-display
+cd ~/transit-display
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements-azure.txt
+
+# create .env with the Azure SP creds + AZURE_KEYVAULT_URL (see PI_SETUP.md)
+
+# one command: device mode + kiosk + rotation + no-blank + service + cron
+bash deploy/setup_kiosk.sh advait
+sudo reboot
 ```
 
-Auth uses `DefaultAzureCredential`:
-- **Local:** `az login` (install `azure-cli`).
-- **Pi:** set `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_CLIENT_SECRET`
-  (from the service principal) in `transit.service`.
+It boots straight into the fullscreen board, auto-respawns the browser, and
+**auto-updates from git every hour** (pulling new code *and* any change to its
+`devices/<id>.json`), restarting only when the commit actually changed.
 
-Then `pip install -r requirements-azure.txt`, blank the `vars` keys, and no API
-key lives in config.json at all. The vault URL itself isn't secret.
+### Off-hours (scheduled screen off)
+Set `off_hours` in the device config (e.g. `"23:00-07:00"`) to turn the **screen**
+off during that window — evaluated in the board's local time, wrapping midnight.
+The Pi keeps running (still fetching/updating); only the display sleeps, and it
+comes back on by itself. Blank = always on. Change it anytime by editing the
+device's file in git and pushing.
 
 ## Adding a new transit system
 
 1. Create `fetcher/<name>.py` with a `BaseFetcher` subclass implementing
-   `fetch() -> list[Departure]` and a `feed_type` class attribute.
-2. Register it in `fetcher/__init__.py`'s `FETCHERS` dict.
+   `fetch() -> list[Departure]` and a `feed_type` attribute (optionally
+   `find_stops(...)` + `supports_stop_search` for the admin search).
+2. Register it in `fetcher/__init__.py`'s `FETCHERS` dict, and add a theme in
+   `renderer/themes.py`.
 
-That's it — the renderer, web UI, and loop pick it up automatically.
-
-## Deploy on the Pi
-
-```bash
-# On the Pi (Raspberry Pi OS):
-sudo apt install python3-venv
-git clone <your-repo> /home/pi/transit-display
-cd /home/pi/transit-display
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-pip install inky[rpi]          # Inky driver (Pi only)
-
-# systemd auto-start
-sudo cp transit.service /etc/systemd/system/
-sudo systemctl enable --now transit.service
-journalctl -u transit.service -f      # logs
-```
-
-`http://transitpi.local:5000` — set the Pi's hostname to `transitpi`
-(`sudo raspi-config` → System → Hostname) so the admin UI is reachable by name.
-The fullscreen tracker is at `http://transitpi.local:5000/display`.
-
-### Auto-update (cron)
-
-```bash
-chmod +x deploy/autoupdate.sh
-crontab -e        # paste the line from deploy/crontab.txt
-```
-
-Every 5 minutes it does `git fetch` + hard reset to `origin/main` and restarts
-the service only if the commit changed.
-```
-*/5 * * * * /home/pi/transit-display/deploy/autoupdate.sh >> /home/pi/transit-display/autoupdate.log 2>&1
-```
+The renderer, admin UI, and loop pick it up automatically.

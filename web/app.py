@@ -125,6 +125,12 @@ ADMIN = """
         secret <code>name</code> (with hyphens: <code>cta-key</code>) — so no key ever touches git.</p>
       <hr>
 
+      <h2>Schedule (optional)</h2>
+      <label>Off hours — turn the screen off during this window (board local time)
+        <input type="text" name="off_hours" value="{{ config.off_hours }}" placeholder="blank = always on, e.g. 23:00-07:00">
+      </label>
+      <hr>
+
       <h2>Displays</h2>
       <p class="small" style="margin:-4px 0 14px">Each card is one independent display. Everything is set
         per-display: its name, transit system (which sets the colors &amp; time zone), stops, weather, and refresh.
@@ -358,6 +364,7 @@ def save():
     form = request.form
     config = load_config()
     config["key_vault_url"] = form.get("key_vault_url", "").strip()
+    config["off_hours"] = form.get("off_hours", "").strip()
 
     feeds = []
     i = 0

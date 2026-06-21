@@ -55,6 +55,8 @@ DEFAULT_CONFIG = {
     "vars": {},
     "key_vault_url": "",     # optional Azure Key Vault for ${...} secrets
     "refresh_seconds": 60,   # background-loop cadence (fastest display wins)
+    "off_hours": "",         # blank = always on; e.g. "23:00-07:00" turns the
+                             #   screen off in the board's local time (wraps midnight)
     "feeds": [],             # each feed is one self-contained display
 }
 
@@ -79,6 +81,7 @@ def load_config() -> dict:
     merged.setdefault("feeds", [])
     merged.setdefault("vars", {})
     merged.setdefault("key_vault_url", "")
+    merged.setdefault("off_hours", "")
     return merged
 
 
