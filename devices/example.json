@@ -1,0 +1,16 @@
+{
+  "key_vault_url": "https://kv-emil.vault.azure.net/",
+  "vars": { "cta_key": "", "mta_key": "", "njt_key": "", "cta_bus_key": "" },
+  "refresh_seconds": 60,
+  "feeds": [
+    {
+      "type": "mta",
+      "enabled": true,
+      "label": "Sam — Atlantic Av",
+      "stop_id": "R31N, R31S",
+      "api_key": "${mta_key}",
+      "zip": "11217",
+      "refresh_seconds": 60
+    }
+  ]
+}
