@@ -11,18 +11,18 @@ runs and renders to `preview.png` / the browser, so you can build and preview
 the layout on your laptop.
 
 **Highlights**
-- 🚆🚌 **Multi-agency**: CTA (L trains **+ buses**), MTA (subway **+ buses**),
+- **Multi-agency**: CTA (L trains **+ buses**), MTA (subway **+ buses**),
   NJ Transit rail — mixed and merged on one board.
-- 🎨 **Per-city theming**: Chicago-flag (stars) for CTA, NYC tricolor flag for
+- **Per-city theming**: Chicago-flag (stars) for CTA, NYC tricolor flag for
   MTA, with correct timezone clocks (CST/EST), weather widget, route badges in
   line colors, bus/train icons, and per-row stop labels.
-- 🗂️ **Many devices, one repo**: each friend's Pi loads its own
+- **Many devices, one repo**: each friend's Pi loads its own
   `devices/<id>.json` — change a deployed board's stops by editing that file
   and pushing (no SSH).
-- 🔐 **Secrets in Azure Key Vault**: API keys never touch git or the device's
+- **Secrets in Azure Key Vault**: API keys never touch git or the device's
   config; the config only holds `${...}` references.
-- 🔄 **Self-managing**: auto-starts on boot, auto-respawns, and pulls new code
-  from git every few minutes.
+- **Self-managing**: auto-starts on boot, auto-respawns, and pulls new code
+  from git every hour.
 
 ```
 transit-display/
