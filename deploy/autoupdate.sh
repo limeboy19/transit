@@ -5,6 +5,8 @@ set -euo pipefail
 
 REPO_DIR="/home/pi/transit-display"
 SERVICE="transit.service"
+# cron has a minimal env, so point git at the read-only deploy key explicitly.
+export GIT_SSH_COMMAND="ssh -i /home/pi/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 
 cd "$REPO_DIR"
 
