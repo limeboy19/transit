@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
 
 from flask import Flask, redirect, render_template_string, request, send_file, url_for
 
+import netsetup
 from appconfig import load_config, save_config
 from fetcher import FETCHERS, fetch_all
 from geocode import geocode
@@ -304,6 +305,137 @@ DISPLAY_INDEX = """
 </body></html>
 """
 
+# Touchscreen WiFi onboarding. Shown by the kiosk INSTEAD of the board when the
+# device boots with no internet (e.g. moved to a new home). Returned as a raw
+# string (not via Jinja) so the inline JS/CSS braces are left untouched.
+WIFI = """
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Connect to WiFi</title>
+<style>
+  :root{--bg:#f6f7f9;--card:#fff;--line:#e4e7ec;--fg:#1f2733;--muted:#6b7280;--accent:#1d80d6;--ok:#0e8a3e;--err:#c23b3b}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font:16px/1.4 system-ui,-apple-system,sans-serif;overflow:hidden}
+  .wrap{height:100%;display:flex;flex-direction:column;max-width:780px;margin:0 auto;padding:16px}
+  h1{font-size:22px;margin:0}
+  .sub{color:var(--muted);margin:2px 0 12px;font-size:14px}
+  .top{display:flex;justify-content:space-between;align-items:flex-end}
+  .btn{cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--fg);
+    border-radius:10px;padding:10px 14px;font-size:15px;font-weight:600}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn:active{transform:translateY(1px)}
+  #list{flex:1;overflow-y:auto;border:1px solid var(--line);border-radius:14px;background:#fff}
+  .net{display:flex;align-items:center;gap:12px;padding:15px 16px;border-bottom:1px solid var(--line);cursor:pointer}
+  .net:last-child{border-bottom:none}
+  .net:active{background:#f2f7fd}
+  .net .name{flex:1;font-weight:600}
+  .net .lock{color:var(--muted)}
+  .bars{display:inline-flex;align-items:flex-end;gap:2px;height:18px}
+  .bars i{width:4px;background:#cfd5de;border-radius:1px}
+  .bars i.on{background:var(--accent)}
+  .empty{padding:22px;text-align:center;color:var(--muted)}
+  #pw{display:none;flex:1;flex-direction:column}
+  .pwhead{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .field input{width:100%;padding:14px;border:1px solid var(--line);border-radius:10px;font-size:18px}
+  .status{min-height:22px;font-size:14px;margin:8px 2px}
+  .status.err{color:var(--err)}.status.ok{color:var(--ok)}
+  .kb{margin-top:auto}
+  .krow{display:flex;gap:6px;justify-content:center;margin:6px 0}
+  .key{flex:1;max-width:64px;text-align:center;padding:14px 0;background:#fff;border:1px solid var(--line);
+    border-radius:9px;font-size:18px;font-weight:600;cursor:pointer}
+  .key:active{background:#eef3f9}
+  .key.wide{max-width:150px}.key.ctrl{background:#eef1f5}
+</style></head><body>
+<div class="wrap">
+  <div class="top">
+    <div><h1>Connect to WiFi</h1><div class="sub">Pick your network to start the board.</div></div>
+    <button class="btn" id="rescan" onclick="loadNets(true)">Rescan</button>
+  </div>
+  <div id="list"><div class="empty">Scanning…</div></div>
+  <div id="pw">
+    <div class="pwhead"><button class="btn" onclick="showList()">‹ Back</button><b id="pwssid"></b></div>
+    <div class="field"><input id="pwinput" type="text" placeholder="Password" autocomplete="off" readonly></div>
+    <div class="status" id="status"></div>
+    <div class="kb" id="kb"></div>
+    <button class="btn primary" style="margin-top:8px;padding:15px" onclick="doConnect()">Connect</button>
+  </div>
+</div>
+<script>
+var selected=null, shift=false, sym=false, pw="";
+var L1=["q","w","e","r","t","y","u","i","o","p"],L2=["a","s","d","f","g","h","j","k","l"],L3=["z","x","c","v","b","n","m"];
+var S1=["1","2","3","4","5","6","7","8","9","0"],S2=["!","@","#","$","%","&","*","-","_"],S3=["+","=","/","?",".",",",":",";"];
+function bars(sig){var n=sig>=75?4:sig>=50?3:sig>=25?2:1,h=[8,11,14,18],s="";for(var i=0;i<4;i++){s+='<i class="'+(i<n?'on':'')+'" style="height:'+h[i]+'px"></i>';}return '<span class="bars">'+s+'</span>';}
+async function loadNets(rescan){
+  var box=document.getElementById('list');
+  box.innerHTML='<div class="empty">'+(rescan?'Rescanning…':'Scanning…')+'</div>';
+  try{
+    var r=await fetch('/wifi/scan'+(rescan?'?rescan=1':''));var d=await r.json();
+    if(d.online){location.href='/display/0';return;}
+    if(!d.supported){box.innerHTML='<div class="empty">WiFi setup runs on the device itself.</div>';return;}
+    if(!d.networks||!d.networks.length){box.innerHTML='<div class="empty">No networks found. Tap Rescan.</div>';return;}
+    box.innerHTML='';
+    d.networks.forEach(function(n){
+      var el=document.createElement('div');el.className='net';
+      el.innerHTML='<span class="name"></span>'+(n.secure?'<span class="lock">&#128274;</span>':'')+bars(n.signal);
+      el.querySelector('.name').textContent=n.ssid;el.onclick=function(){pick(n);};box.appendChild(el);
+    });
+  }catch(e){box.innerHTML='<div class="empty">Scan failed. Tap Rescan.</div>';}
+}
+function pick(n){
+  selected=n;pw="";shift=false;sym=false;
+  document.getElementById('pwssid').textContent=n.ssid;document.getElementById('pwinput').value="";setStatus("","");
+  document.getElementById('list').style.display='none';document.getElementById('pw').style.display='flex';
+  document.getElementById('rescan').style.visibility='hidden';drawKb();
+}
+function showList(){
+  document.getElementById('pw').style.display='none';document.getElementById('list').style.display='block';
+  document.getElementById('rescan').style.visibility='visible';
+}
+function setStatus(msg,kind){var s=document.getElementById('status');s.textContent=msg;s.className='status '+(kind||'');}
+function tapKey(k){
+  if(k==='shift'){shift=!shift;drawKb();return;}
+  if(k==='sym'){sym=!sym;shift=false;drawKb();return;}
+  if(k==='back'){pw=pw.slice(0,-1);}else if(k==='space'){pw+=' ';}
+  else{pw+=(shift?k.toUpperCase():k);if(shift){shift=false;drawKb();}}
+  document.getElementById('pwinput').value=pw;
+}
+function mkRow(keys){
+  var row=document.createElement('div');row.className='krow';
+  keys.forEach(function(k){var b=document.createElement('div');b.className='key';b.textContent=shift?k.toUpperCase():k;b.onclick=function(){tapKey(k);};row.appendChild(b);});
+  return row;
+}
+function ctrlKey(label,k,wide){var b=document.createElement('div');b.className='key ctrl'+(wide?' wide':'');b.textContent=label;b.onclick=function(){tapKey(k);};return b;}
+function drawKb(){
+  var kb=document.getElementById('kb');kb.innerHTML='';
+  kb.appendChild(mkRow(sym?S1:L1));kb.appendChild(mkRow(sym?S2:L2));
+  var row3=mkRow(sym?S3:L3);row3.insertBefore(ctrlKey(shift?'\\u21E7':'\\u21EA','shift'),row3.firstChild);
+  row3.appendChild(ctrlKey('\\u232B','back'));kb.appendChild(row3);
+  var row4=document.createElement('div');row4.className='krow';
+  row4.appendChild(ctrlKey(sym?'abc':'?123','sym'));row4.appendChild(ctrlKey('space','space',true));kb.appendChild(row4);
+}
+async function doConnect(){
+  if(!selected){return;}
+  setStatus('Connecting to '+selected.ssid+'…','');
+  try{
+    var r=await fetch('/wifi/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:selected.ssid,password:pw})});
+    var d=await r.json();
+    if(d.ok){setStatus('Connected! Starting board…','ok');waitOnline();}
+    else{setStatus(d.message||'Could not connect.','err');}
+  }catch(e){setStatus('Could not connect. Try again.','err');}
+}
+async function waitOnline(){
+  for(var i=0;i<20;i++){
+    try{var r=await fetch('/wifi/online');var t=await r.text();if(t.trim()==='yes'){location.href='/display/0';return;}}catch(e){}
+    await new Promise(function(res){setTimeout(res,1500);});
+  }
+  location.href='/display/0';
+}
+loadNets(false);
+</script>
+</body></html>
+"""
+
 # ------------------------------------------------------------------- routes --
 
 def _feeds_for_form(config):
@@ -474,6 +606,38 @@ def _render_single_feed(config, idx, dither):
     results = fetch_all(single)
     img = render_image(results, single, get_weather(single))
     return simulate_eink(img) if dither else img
+
+
+@app.route("/wifi")
+def wifi_page():
+    return WIFI
+
+
+@app.route("/wifi/scan")
+def wifi_scan():
+    return {
+        "supported": netsetup.wifi_supported(),
+        "online": netsetup.has_internet(),
+        "networks": netsetup.scan(rescan=request.args.get("rescan") == "1"),
+    }
+
+
+@app.route("/wifi/connect", methods=["POST"])
+def wifi_connect():
+    data = request.get_json(silent=True) or {}
+    ok, msg = netsetup.connect((data.get("ssid") or "").strip(), data.get("password") or "")
+    return {"ok": ok, "message": msg, "online": netsetup.has_internet() if ok else False}
+
+
+@app.route("/wifi/online")
+def wifi_online():
+    # plain text so the kiosk launcher can branch on it with a simple shell test
+    return ("yes" if netsetup.has_internet() else "no"), 200, {"Content-Type": "text/plain"}
+
+
+@app.route("/wifi/status")
+def wifi_status():
+    return {"online": netsetup.has_internet(), "supported": netsetup.wifi_supported()}
 
 
 @app.route("/preview.png")

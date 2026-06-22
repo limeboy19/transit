@@ -69,9 +69,12 @@ echo ">> granting passwordless sudo for restart + reboot (cron has no tty)"
 # `|| echo` fallback so a minimal PATH (no /usr/sbin) can't abort us under set -e.
 # reboot is just a symlink to systemctl, so we authorize `systemctl reboot`.
 SYSTEMCTL="$(command -v systemctl 2>/dev/null || echo /usr/bin/systemctl)"
+# nmcli: the touchscreen WiFi setup page drives it, but the app runs headless
+# (no polkit session) so it needs root. Scoped to nmcli with any args.
+NMCLI="$(command -v nmcli 2>/dev/null || echo /usr/bin/nmcli)"
 SUDO_FILE=/etc/sudoers.d/transit
 sudo tee "$SUDO_FILE" >/dev/null <<EOF
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL restart transit.service, $SYSTEMCTL start transit.service, $SYSTEMCTL stop transit.service, $SYSTEMCTL reboot
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL restart transit.service, $SYSTEMCTL start transit.service, $SYSTEMCTL stop transit.service, $SYSTEMCTL reboot, $NMCLI *
 EOF
 sudo chmod 0440 "$SUDO_FILE"
 sudo visudo -cf "$SUDO_FILE" >/dev/null || { echo "   sudoers check FAILED, removing"; sudo rm -f "$SUDO_FILE"; }
@@ -81,14 +84,21 @@ cat > "$HOME/kiosk.sh" <<EOF
 #!/bin/bash
 export XDG_RUNTIME_DIR=/run/user/\$(id -u)
 export WAYLAND_DISPLAY=wayland-0
+BASE=http://localhost:$PORT
 # wait until the app is serving before opening the browser
-for i in \$(seq 1 30); do curl -s -o /dev/null http://localhost:$PORT/display/0 && break; sleep 2; done
-# respawn the browser if it ever exits/crashes
+for i in \$(seq 1 30); do curl -s -o /dev/null \$BASE/wifi/status && break; sleep 2; done
+# respawn the browser if it ever exits/crashes; re-check connectivity each time
 while true; do
+  # online -> show the board; offline -> show the touchscreen WiFi setup page
+  if [ "\$(curl -fsS --max-time 6 \$BASE/wifi/online 2>/dev/null)" = "yes" ]; then
+    PAGE=/display/0
+  else
+    PAGE=/wifi
+  fi
   chromium --kiosk --ozone-platform=wayland --password-store=basic \\
     --noerrdialogs --disable-infobars --disable-session-crashed-bubble \\
     --check-for-update-interval=31536000 \\
-    --app=http://localhost:$PORT/display/0
+    --app=\$BASE\$PAGE
   sleep 3
 done
 EOF
