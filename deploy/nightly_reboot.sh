@@ -13,6 +13,6 @@ STATE=$(.venv/bin/python -c \
 
 if [ "$STATE" = "off" ]; then
     echo "$(date -Is) off-hours: nightly reboot"
-    sudo reboot
+    sudo systemctl reboot
 fi
 exit 0

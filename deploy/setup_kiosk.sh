@@ -66,10 +66,12 @@ echo ">> granting passwordless sudo for restart + reboot (cron has no tty)"
 # Without this, the hourly auto-update's `sudo systemctl restart` and the
 # nightly reboot would silently fail (cron can't answer a password prompt).
 # Scoped to exactly these commands -- not blanket sudo.
-SYSTEMCTL="$(command -v systemctl)"; REBOOT="$(command -v reboot)"
+# `|| echo` fallback so a minimal PATH (no /usr/sbin) can't abort us under set -e.
+# reboot is just a symlink to systemctl, so we authorize `systemctl reboot`.
+SYSTEMCTL="$(command -v systemctl 2>/dev/null || echo /usr/bin/systemctl)"
 SUDO_FILE=/etc/sudoers.d/transit
 sudo tee "$SUDO_FILE" >/dev/null <<EOF
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL restart transit.service, $SYSTEMCTL start transit.service, $SYSTEMCTL stop transit.service, $REBOOT
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL restart transit.service, $SYSTEMCTL start transit.service, $SYSTEMCTL stop transit.service, $SYSTEMCTL reboot
 EOF
 sudo chmod 0440 "$SUDO_FILE"
 sudo visudo -cf "$SUDO_FILE" >/dev/null || { echo "   sudoers check FAILED, removing"; sudo rm -f "$SUDO_FILE"; }
@@ -104,10 +106,12 @@ sudo raspi-config nonint do_blanking 1 || echo "   (raspi-config blanking toggle
 
 echo ">> installing cron (hourly auto-update + screen schedule + nightly reboot)"
 chmod +x "$APP_DIR/deploy/autoupdate.sh" "$APP_DIR/deploy/screen_schedule.sh" "$APP_DIR/deploy/nightly_reboot.sh"
-( crontab -l 2>/dev/null | grep -v -e 'deploy/autoupdate.sh' -e 'deploy/screen_schedule.sh' -e 'deploy/nightly_reboot.sh' ; \
+# `|| true`: an empty crontab makes `crontab -l` exit non-zero, which would
+# abort us under set -e + pipefail before we ever write the new entries.
+{ crontab -l 2>/dev/null | grep -v -e 'deploy/autoupdate.sh' -e 'deploy/screen_schedule.sh' -e 'deploy/nightly_reboot.sh' || true ; \
   echo "0 * * * * $APP_DIR/deploy/autoupdate.sh >> $HOME/autoupdate.log 2>&1" ; \
   echo "* * * * * $APP_DIR/deploy/screen_schedule.sh" ; \
-  echo "33 3 * * * $APP_DIR/deploy/nightly_reboot.sh >> $HOME/autoupdate.log 2>&1" ) | crontab -
+  echo "33 3 * * * $APP_DIR/deploy/nightly_reboot.sh >> $HOME/autoupdate.log 2>&1" ; } | crontab -
 
 echo
 echo ">> kiosk setup complete. Reboot to apply:  sudo reboot"
