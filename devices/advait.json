@@ -7,7 +7,7 @@
     {
       "type": "cta",
       "enabled": true,
-      "label": "Advait",
+      "label": "Advait1",
       "stop_id": "40380, 6034, 15350",
       "api_key": "${cta_key}",
       "bus_key": "${cta_bus_key}",
