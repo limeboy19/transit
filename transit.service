@@ -1,7 +1,12 @@
+# Reference template only. deploy/setup_kiosk.sh REGENERATES this unit with the
+# Pi's real username and home path, so you don't have to edit it by hand.
 [Unit]
 Description=Raspberry Pi Transit Display
 After=network-online.target
 Wants=network-online.target
+# Retry forever (e.g. if it boots before WiFi is ready) instead of giving up
+# after a few quick restarts.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -10,7 +15,6 @@ WorkingDirectory=/home/pi/transit-display
 ExecStart=/home/pi/transit-display/.venv/bin/python /home/pi/transit-display/main.py
 Restart=always
 RestartSec=10
-# Inky needs SPI/GPIO access; the pi user is in the relevant groups by default.
 Environment=PYTHONUNBUFFERED=1
 
 [Install]

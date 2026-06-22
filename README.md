@@ -21,8 +21,10 @@ the layout on your laptop.
   and pushing (no SSH).
 - **Secrets in Azure Key Vault**: API keys never touch git or the device's
   config; the config only holds `${...}` references.
-- **Self-managing**: auto-starts on boot, auto-respawns, and pulls new code
-  from git every hour.
+- **Self-managing & self-healing**: auto-starts on boot, auto-respawns, and
+  pulls new code hourly — validating each update and **rolling back a bad
+  commit automatically** so a typo can't brick a deployed device. Reboots
+  itself nightly (during off-hours) for a clean slate.
 
 ```
 transit-display/
@@ -181,7 +183,11 @@ sudo reboot
 
 It boots straight into the fullscreen board, auto-respawns the browser, and
 **auto-updates from git every hour** (pulling new code *and* any change to its
-`devices/<id>.json`), restarting only when the commit actually changed.
+`devices/<id>.json`), restarting only when the commit actually changed. Each
+update is validated — if the new code fails to import or the board doesn't come
+back up within a minute, it **rolls back to the previous commit automatically**,
+so a bad push never bricks an unattended device. The Pi also reboots itself once
+a night, but only while the screen is in its off-hours window.
 
 ### Off-hours (scheduled screen off)
 Set `off_hours` in the device config (e.g. `"23:00-07:00"`) to turn the **screen**

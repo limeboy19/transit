@@ -45,8 +45,17 @@ def loop(display: Display) -> None:
 
 
 def start_web(port: int = 5000) -> None:
-    from web.app import app  # imported lazily so --no-web has no Flask dep need
-    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+    # app.run() blocks forever in normal operation. If it ever returns or
+    # raises, the kiosk's only page source is dead -> force the whole process
+    # to exit so systemd restarts it (a live-but-half-dead process would just
+    # leave a "connection refused" screen up indefinitely).
+    try:
+        from web.app import app  # imported lazily so --no-web has no Flask dep need
+        app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[web] server crashed: {exc}", flush=True)
+    print("[web] server exited unexpectedly; forcing process restart", flush=True)
+    os._exit(1)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -13,7 +13,8 @@
 #   * a kiosk launcher (fullscreen Chromium, auto-respawn, skips the keyring)
 #   * labwc autostart (rotate to landscape + launch the kiosk)
 #   * screen blanking disabled (always-on display)
-#   * auto-update cron (pull latest code every 5 min)
+#   * auto-update cron (hourly; validates + rolls back a bad commit)
+#   * nightly reboot (only while the screen is in its off-hours window)
 set -euo pipefail
 
 DEVICE="${1:-}"  # e.g. "advait" -> loads devices/advait.json from git
@@ -35,10 +36,43 @@ if [ -n "$DEVICE" ]; then
   fi
 fi
 
-echo ">> installing systemd service (app auto-starts on boot)"
-sudo cp "$APP_DIR/transit.service" /etc/systemd/system/transit.service
+echo ">> installing systemd service (app auto-starts on boot, as $USER)"
+# Generate the unit from the REAL user/home/paths -- never assume the username
+# is 'pi'. StartLimitIntervalSec=0 means it retries forever (e.g. if it boots
+# before WiFi is ready) instead of giving up after a few quick restarts.
+sudo tee /etc/systemd/system/transit.service >/dev/null <<EOF
+[Unit]
+Description=Raspberry Pi Transit Display
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$APP_DIR
+ExecStart=$APP_DIR/.venv/bin/python $APP_DIR/main.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
 sudo systemctl daemon-reload
 sudo systemctl enable transit.service
+
+echo ">> granting passwordless sudo for restart + reboot (cron has no tty)"
+# Without this, the hourly auto-update's `sudo systemctl restart` and the
+# nightly reboot would silently fail (cron can't answer a password prompt).
+# Scoped to exactly these commands -- not blanket sudo.
+SYSTEMCTL="$(command -v systemctl)"; REBOOT="$(command -v reboot)"
+SUDO_FILE=/etc/sudoers.d/transit
+sudo tee "$SUDO_FILE" >/dev/null <<EOF
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL restart transit.service, $SYSTEMCTL start transit.service, $SYSTEMCTL stop transit.service, $REBOOT
+EOF
+sudo chmod 0440 "$SUDO_FILE"
+sudo visudo -cf "$SUDO_FILE" >/dev/null || { echo "   sudoers check FAILED, removing"; sudo rm -f "$SUDO_FILE"; }
 
 echo ">> writing kiosk launcher (~/kiosk.sh)"
 cat > "$HOME/kiosk.sh" <<EOF
@@ -68,11 +102,12 @@ EOF
 echo ">> disabling screen blanking (always-on display)"
 sudo raspi-config nonint do_blanking 1 || echo "   (raspi-config blanking toggle skipped; non-fatal)"
 
-echo ">> installing cron (hourly auto-update + per-minute screen schedule)"
-chmod +x "$APP_DIR/deploy/autoupdate.sh" "$APP_DIR/deploy/screen_schedule.sh"
-( crontab -l 2>/dev/null | grep -v -e 'deploy/autoupdate.sh' -e 'deploy/screen_schedule.sh' ; \
+echo ">> installing cron (hourly auto-update + screen schedule + nightly reboot)"
+chmod +x "$APP_DIR/deploy/autoupdate.sh" "$APP_DIR/deploy/screen_schedule.sh" "$APP_DIR/deploy/nightly_reboot.sh"
+( crontab -l 2>/dev/null | grep -v -e 'deploy/autoupdate.sh' -e 'deploy/screen_schedule.sh' -e 'deploy/nightly_reboot.sh' ; \
   echo "0 * * * * $APP_DIR/deploy/autoupdate.sh >> $HOME/autoupdate.log 2>&1" ; \
-  echo "* * * * * $APP_DIR/deploy/screen_schedule.sh" ) | crontab -
+  echo "* * * * * $APP_DIR/deploy/screen_schedule.sh" ; \
+  echo "33 3 * * * $APP_DIR/deploy/nightly_reboot.sh >> $HOME/autoupdate.log 2>&1" ) | crontab -
 
 echo
 echo ">> kiosk setup complete. Reboot to apply:  sudo reboot"
