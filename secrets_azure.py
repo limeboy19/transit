@@ -44,11 +44,15 @@ def get_secret(name: str, vault_url: str) -> str | None:
     if cache_key in _SECRET_CACHE:
         return _SECRET_CACHE[cache_key]
 
-    value: str | None = None
     try:
-        client = _client(vault_url)
-        value = client.get_secret(name.replace("_", "-")).value
+        value = _client(vault_url).get_secret(name.replace("_", "-")).value
     except Exception as exc:  # noqa: BLE001 - optional dependency / network / auth
+        # Do NOT cache the failure. A transient outage -- e.g. the device booted
+        # before its WiFi was set up -- must not poison the key forever. Returning
+        # None uncached means the next fetch loop retries, so the board self-heals
+        # within one refresh once connectivity (and the vault) come back.
         print(f"[keyvault] could not fetch '{name}': {exc}")
-    _SECRET_CACHE[cache_key] = value
+        return None
+    if value is not None:
+        _SECRET_CACHE[cache_key] = value
     return value
