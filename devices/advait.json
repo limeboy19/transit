@@ -1,18 +1,24 @@
 {
+  "vars": {
+    "cta_key": "",
+    "mta_key": "",
+    "njt_key": "",
+    "cta_bus_key": ""
+  },
   "key_vault_url": "https://kv-emil.vault.azure.net/",
-  "vars": { "cta_key": "", "mta_key": "", "njt_key": "", "cta_bus_key": "" },
   "refresh_seconds": 60,
   "off_hours": "01:00-05:00",
   "feeds": [
     {
       "type": "cta",
       "enabled": true,
-      "label": "Advait",
-      "stop_id": "40380, 6034, 15350",
+      "label": "Maya",
+      "stop_id": "41510, 40170, bus:6241, bus:6034, bus:15356, bus:15350",
       "api_key": "${cta_key}",
-      "bus_key": "${cta_bus_key}",
       "zip": "60607",
-      "refresh_seconds": 60
+      "refresh_seconds": 60,
+      "bus_key": "${cta_bus_key}",
+      "bus_direction": true
     }
   ]
 }

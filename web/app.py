@@ -498,11 +498,21 @@ def save():
     config["key_vault_url"] = form.get("key_vault_url", "").strip()
     config["off_hours"] = form.get("off_hours", "").strip()
 
+    # per-feed settings the admin UI doesn't expose (carried over on save so an
+    # edit here doesn't wipe them). form index i maps to old feed i.
+    old_feeds = config.get("feeds", [])
+    _PRESERVE = ("bus_direction",)
+
     feeds = []
     i = 0
     while f"feed-{i}-type" in form:
         if not form.get(f"feed-{i}-delete"):
-            feeds.append(_feed_from_form(form, str(i)))
+            nf = _feed_from_form(form, str(i))
+            if i < len(old_feeds):
+                for k in _PRESERVE:
+                    if old_feeds[i].get(k) is not None:
+                        nf[k] = old_feeds[i][k]
+            feeds.append(nf)
         i += 1
     new = _feed_from_form(form, "new")
     if new["type"] and (new["stop_id"] or new["label"]):
@@ -520,7 +530,7 @@ def save():
 
 
 def _feed_from_form(form, key):
-    return {
+    feed = {
         "type": str(form.get(f"feed-{key}-type", "")).lower().strip(),
         "enabled": bool(form.get(f"feed-{key}-enabled")),
         "label": form.get(f"feed-{key}-label", "").strip(),
@@ -529,6 +539,13 @@ def _feed_from_form(form, key):
         "zip": form.get(f"feed-{key}-zip", "").strip(),
         "refresh_seconds": _feed_refresh({"refresh_seconds": form.get(f"feed-{key}-refresh", 60)}),
     }
+    # CTA boards may include bus stops, which need the Bus Tracker key. The admin
+    # doesn't expose it, so always carry the vault reference for CTA feeds (the
+    # fetcher only uses it when a bus stop is actually present). Without this, the
+    # admin would silently drop bus_key on save and bus stops would stop working.
+    if feed["type"] == "cta":
+        feed["bus_key"] = "${cta_bus_key}"
+    return feed
 
 
 @app.route("/refresh", methods=["POST"])

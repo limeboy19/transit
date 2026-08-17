@@ -63,6 +63,28 @@ _FONT_CACHE: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
 
 # Font Awesome (bundled) for crisp bus/train glyphs in any theme color.
 ICON_FONT_PATH = Path(__file__).resolve().parent.parent / "fonts" / "fa-solid-900.ttf"
+
+# Header emblem images (e.g. a pet photo standing in for the city flag).
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+_EMBLEM_CACHE: dict = {}
+
+
+def _emblem_image(name: str, height: int):
+    """Load renderer/assets/<name> as RGBA, scaled to `height` px (cached)."""
+    key = (name, height)
+    if key in _EMBLEM_CACHE:
+        return _EMBLEM_CACHE[key]
+    img = None
+    try:
+        im = Image.open(ASSETS_DIR / name).convert("RGBA")
+        bbox = im.getbbox() or (0, 0, im.width, im.height)  # trim transparent margin
+        im = im.crop(bbox)
+        w = max(1, round(im.width * height / im.height))
+        img = im.resize((w, height), Image.LANCZOS)
+    except Exception as exc:  # noqa: BLE001 - missing/corrupt asset -> no emblem
+        print(f"[display] emblem '{name}' failed: {exc}")
+    _EMBLEM_CACHE[key] = img
+    return img
 ICON_BUS = ""     # fa-bus
 ICON_TRAIN = ""   # fa-train-subway
 
@@ -224,7 +246,7 @@ def _weather_icon(draw, x, y, size, icon, theme: Theme):
         draw.line([(cx, cy + size * 0.30), (cx - 4, y + size - 2)], fill=_rgb("#F4B400"), width=3)
 
 
-def _draw_header(draw, theme: Theme, title: str, weather) -> int:
+def _draw_header(img, draw, theme: Theme, title: str, weather) -> int:
     head_h = 84
     mid = head_h // 2
     draw.rectangle([0, 0, WIDTH, head_h], fill=_rgb(theme.band))
@@ -237,7 +259,11 @@ def _draw_header(draw, theme: Theme, title: str, weather) -> int:
 
     # city emblem next to the title (same vertical center)
     emblem_x = 22 + _tw(draw, title, f_title) + 22
-    if theme.emblem == "stars" and theme.stars:
+    if theme.emblem == "image" and theme.emblem_img:
+        em = _emblem_image(theme.emblem_img, 66)
+        if em is not None and emblem_x + em.width < 520:
+            img.paste(em, (emblem_x, mid - em.height // 2), em)
+    elif theme.emblem == "stars" and theme.stars:
         sx = emblem_x + 4
         for _ in range(theme.stars):
             if sx + 22 > 520:
@@ -284,6 +310,23 @@ def _badge_font(draw, departures, badge_w, max_size):
     return _fit_font(draw, longest, "bold", badge_w - 14, max_size, 16)
 
 
+_COMPASS_DIRS = {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}
+
+
+def _draw_compass(draw, cx, cy, r, direction, ring, needle):
+    """A small compass: a ring with a needle pointing the cardinal direction."""
+    d = (direction or "").strip().lower()
+    dx, dy = next((v for name, v in _COMPASS_DIRS.items() if d.startswith(name)), (0, -1))
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=ring, width=2)
+    apex = (cx + dx * r * 0.78, cy + dy * r * 0.78)      # needle tip
+    tail = (cx - dx * r * 0.30, cy - dy * r * 0.30)      # opposite end
+    px, py = -dy, dx                                     # perpendicular for the base
+    b = r * 0.34
+    draw.polygon([apex, (tail[0] + px * b, tail[1] + py * b),
+                  (tail[0] - px * b, tail[1] - py * b)], fill=needle)
+    draw.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=ring)  # hub
+
+
 def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
               route_font=None, show_stop=False):
     pad = 16
@@ -322,19 +365,32 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
     f_to = _font("regular", 18)
     f_dest = _font("bold", 34)
     content_right = x + w - pad - 170        # reserve room for the ETA on the right
-    to_w = _tw(draw, "to ", f_to)
 
-    avail = content_right - dest_x - to_w
-    if sub_text:  # destination gets priority; the stop label takes the remainder
-        stop_reserve = min(120, max(70, int(avail * 0.38)))
-        dest_budget = avail - stop_reserve - 12
+    # primary label: a compass + direction (opt-in, buses) OR "to <destination>"
+    if dep.direction:
+        cr = 15
+        _draw_compass(draw, dest_x + cr, cy, cr, dep.direction,
+                      _rgb(theme.muted), _rgb(theme.accent))
+        prim_x = dest_x + 2 * cr + 12
+        prefix_w = 0
     else:
-        dest_budget = avail
-    draw.text((dest_x, cy), "to", font=f_to, fill=_rgb(theme.muted), anchor="lm")
-    dest = _truncate(draw, dep.destination or "—", f_dest, max(20, dest_budget))
-    draw.text((dest_x + to_w, cy), dest, font=f_dest, fill=_rgb(theme.ink), anchor="lm")
+        prim_x = dest_x
+        prefix_w = _tw(draw, "to ", f_to)
+
+    avail = content_right - prim_x - prefix_w
+    if sub_text:  # primary text gets priority; the stop label takes the remainder
+        stop_reserve = min(120, max(70, int(avail * 0.38)))
+        prim_budget = avail - stop_reserve - 12
+    else:
+        prim_budget = avail
+
+    if not dep.direction:
+        draw.text((prim_x, cy), "to", font=f_to, fill=_rgb(theme.muted), anchor="lm")
+    primary = dep.direction or dep.destination or "—"
+    primary = _truncate(draw, primary, f_dest, max(20, prim_budget))
+    draw.text((prim_x + prefix_w, cy), primary, font=f_dest, fill=_rgb(theme.ink), anchor="lm")
     if sub_text:
-        sx = dest_x + to_w + _tw(draw, dest, f_dest) + 16
+        sx = prim_x + prefix_w + _tw(draw, primary, f_dest) + 16
         if content_right - sx > 36:
             draw.text((sx, cy + 1), _truncate(draw, sub_text, f_to, content_right - sx),
                       font=f_to, fill=_rgb(theme.muted), anchor="lm")
@@ -373,7 +429,7 @@ def render_image(results, config=None, weather=None) -> Image.Image:
     draw = ImageDraw.Draw(img)
 
     title = config.get("title") or theme.title
-    body_top = _draw_header(draw, theme, title, weather)
+    body_top = _draw_header(img, draw, theme, title, weather)
     body_h = HEIGHT - body_top
 
     if not results:

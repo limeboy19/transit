@@ -28,6 +28,8 @@ class Departure:
     feed_type: str = ""             # stamped by the fetcher ("cta"/"mta"/...)
     mode: str = "train"             # "train" or "bus" (drives the row icon)
     stop_name: str = ""             # which stop this came from (for multi-stop boards)
+    direction: str = ""             # e.g. "Northbound"; when set, the row shows a
+                                    # compass + direction instead of "to <destination>"
 
     @property
     def eta_label(self) -> str:

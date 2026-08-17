@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 preview*.png
 autoupdate.log
+.DS_Store
 
 # Your real config holds API keys — keep it OUT of git so it's never committed
 # and so the auto-update `git reset --hard` can't clobber it. Ship

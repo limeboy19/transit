@@ -26,17 +26,19 @@ class Theme:
     ink: str = "#1C1C1C"            # primary text
     muted: str = "#6B7280"          # secondary text
     row_alt: str = "#F2F4F3"        # subtle alternating row shade
-    emblem: str = ""                 # header emblem: "stars" | "nycflag" | ""
+    emblem: str = ""                 # header emblem: "stars" | "nycflag" | "image" | ""
     stars: int = 0                   # # of Chicago flag stars to draw
     star_color: str = "#D2202E"
+    emblem_img: str = ""             # filename in renderer/assets/ (for emblem="image")
 
 
 THEMES: dict[str, Theme] = {
-    # Chicago flag: sky-blue + red stars on white.
+    # Chicago flag: sky-blue accent, with Maya the cat as the header emblem
+    # (swapped in for the four Chicago flag stars).
     "cta": Theme(
         key="cta", title="Chicago Transit", tz="America/Chicago", tz_label="CST",
         accent="#1DA1DC", band="#E9F6FC",
-        row_alt="#EFF8FC", emblem="stars", stars=4, star_color="#D2202E",
+        row_alt="#EFF8FC", emblem="image", emblem_img="maya.png",
     ),
     # MTA: subway navy blue, with a small NYC tricolor flag.
     "mta": Theme(

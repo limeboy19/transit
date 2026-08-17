@@ -23,8 +23,10 @@ ENDPOINT = "http://lapi.transitchicago.com/api/1.0/ttarrivals.aspx"
 # CTA Bus Tracker (separate API + separate key from Train Tracker).
 BUS_ENDPOINT = "https://www.ctabustracker.com/bustime/api/v2/getpredictions"
 CTA_BUS_COLOR = "#2E6E8E"
-# City of Chicago open dataset: list of all 'L' stops with coordinates.
+# City of Chicago open datasets (public, no key): 'L' stops and bus stops,
+# both with coordinates. Bus stops are queried by spatial radius on demand.
 STOPS_DATASET = "https://data.cityofchicago.org/resource/8pix-ypme.json"
+BUS_STOPS_DATASET = "https://data.cityofchicago.org/resource/qs84-j7wh.json"
 _STOPS_CACHE: list[dict] = []
 
 # dataset boolean columns -> friendly line name (for the result detail)
@@ -58,8 +60,16 @@ class CTAFetcher(BaseFetcher):
     @classmethod
     def find_stops(cls, lat: float, lon: float, limit: int = 8,
                    api_key: str = "", mode: str = "", query: str = "") -> list[StopMatch]:
-        if mode == "bus":
-            return []  # CTA integration is trains ('L') only
+        # trains and/or buses, per the admin's Train/Bus/All filter
+        out: list[StopMatch] = []
+        if mode in ("", "train"):
+            out += cls._find_train_stops(lat, lon, limit)
+        if mode in ("", "bus"):
+            out += cls._find_bus_stops(lat, lon, limit)
+        return out
+
+    @classmethod
+    def _find_train_stops(cls, lat: float, lon: float, limit: int) -> list[StopMatch]:
         from geocode import haversine_mi
 
         rows = cls._load_stops()
@@ -92,6 +102,47 @@ class CTAFetcher(BaseFetcher):
             detail = f"{dist:.1f} mi" + (f" · {lines}" if lines else "")
             out.append(StopMatch(id=st["id"], name=st["name"], detail=detail))
         return out
+
+    @classmethod
+    def _find_bus_stops(cls, lat: float, lon: float, limit: int) -> list[StopMatch]:
+        """Nearest CTA bus stops via the city's open dataset (spatial query)."""
+        from geocode import haversine_mi
+        try:
+            resp = requests.get(BUS_STOPS_DATASET, params={
+                "$where": f"within_circle(the_geom, {lat}, {lon}, 1200)",
+                "$limit": 120,
+            }, timeout=15)
+            resp.raise_for_status()
+            rows = resp.json()
+        except Exception as exc:  # noqa: BLE001 - search is best-effort
+            print(f"[cta] bus stop search failed: {exc}")
+            return []
+
+        scored = []
+        for row in rows:
+            coords = (row.get("the_geom") or {}).get("coordinates")
+            raw_id = row.get("systemstop")
+            if not coords or not raw_id:
+                continue
+            try:
+                sid = str(int(float(raw_id)))
+            except (ValueError, TypeError):
+                continue
+            slon, slat = coords[0], coords[1]
+            name = (row.get("public_nam")
+                    or f"{row.get('street', '')} & {row.get('cross_st', '')}").strip(" &")
+            bits = [f"{haversine_mi(lat, lon, slat, slon):.1f} mi"]
+            if row.get("routesstpg"):
+                bits.append(str(row["routesstpg"]).strip())
+            if row.get("dir"):
+                bits.append(str(row["dir"]).strip())
+            # "bus:" prefix forces bus classification even if the id happens to
+            # look like a train id (5 digits starting 3/4).
+            scored.append((haversine_mi(lat, lon, slat, slon),
+                           StopMatch(id=f"bus:{sid}", name=name,
+                                     detail=" · ".join(bits), mode="bus")))
+        scored.sort(key=lambda t: t[0])
+        return [m for _, m in scored[:limit]]
 
     @classmethod
     def _load_stops(cls) -> list[dict]:
@@ -184,6 +235,8 @@ class CTAFetcher(BaseFetcher):
         })
         resp.raise_for_status()
         data = resp.json().get("bustime-response", {}) or {}
+        # opt-in per feed: show "Northbound" + a compass instead of "to <dest>"
+        show_dir = bool(self.config.get("bus_direction"))
         out: list[Departure] = []
         for prd in data.get("prd", []) or []:
             cd = str(prd.get("prdctdn", "")).strip().upper()
@@ -203,6 +256,7 @@ class CTAFetcher(BaseFetcher):
                 delayed=delayed,
                 mode="bus",
                 stop_name=str(prd.get("stpnm", "")).strip(),
+                direction=(str(prd.get("rtdir", "")).strip() if show_dir else ""),
             ))
         # only surface an error if we got nothing usable
         if not out and data.get("error"):
