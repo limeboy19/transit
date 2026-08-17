@@ -80,7 +80,7 @@ A config is JSON with a top level and a list of `feeds` (each feed = one board):
 
 ```json
 {
-  "key_vault_url": "https://kv-emil.vault.azure.net/",
+  "key_vault_url": "https://<your-vault>.vault.azure.net/",
   "vars": { "cta_key": "", "mta_key": "", "njt_key": "", "cta_bus_key": "" },
   "refresh_seconds": 60,
   "feeds": [
@@ -152,10 +152,10 @@ ever lives in git or the config**.
 Set `key_vault_url` (or the `AZURE_KEYVAULT_URL` env var). `${cta_key}` maps to
 the vault secret `cta-key` (underscores → hyphens). Add secrets:
 ```bash
-az keyvault secret set --vault-name kv-emil --name cta-key     --value "<train key>"
-az keyvault secret set --vault-name kv-emil --name cta-bus-key --value "<bus key>"
-az keyvault secret set --vault-name kv-emil --name mta-key     --value "<bus time key>"
-az keyvault secret set --vault-name kv-emil --name njt-key     --value "<user>:<pass>"
+az keyvault secret set --vault-name <your-vault> --name cta-key     --value "<train key>"
+az keyvault secret set --vault-name <your-vault> --name cta-bus-key --value "<bus key>"
+az keyvault secret set --vault-name <your-vault> --name mta-key     --value "<bus time key>"
+az keyvault secret set --vault-name <your-vault> --name njt-key     --value "<user>:<pass>"
 ```
 Auth is `DefaultAzureCredential`. On the Pi, a read-only **service principal**
 (`Key Vault Secrets User`) supplies `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /

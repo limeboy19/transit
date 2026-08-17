@@ -69,7 +69,7 @@ pip install -r requirements-azure.txt   # only if using Key Vault
 The app needs API keys. Two options:
 
 **A. Azure Key Vault (matches our setup).** Create `.env` with the service-principal
-creds so the Pi can read `kv-emil`:
+creds so the Pi can read your Key Vault:
 ```bash
 nano ~/transit-display/.env
 ```
@@ -77,8 +77,10 @@ nano ~/transit-display/.env
 AZURE_CLIENT_ID=...
 AZURE_TENANT_ID=...
 AZURE_CLIENT_SECRET=...
+AZURE_KEYVAULT_URL=https://<your-vault>.vault.azure.net/
 ```
-Leave `key_vault_url` set in `config.json` and the `vars` blank — keys come from the vault.
+Leave the `vars` blank — keys come from the vault. The vault URL is read from
+`AZURE_KEYVAULT_URL` here, so it stays out of git.
 
 **B. Simpler (no Azure):** put the keys straight into this Pi's `config.json` `vars`
 (it's git-ignored, so never committed). Edit later from the web UI.
