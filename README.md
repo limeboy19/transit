@@ -1,7 +1,7 @@
 # Transit Display
 
-> 🍋 Part of **[limeboy.xyz](https://github.com/limeboy19/landing)** — my personal project hub.
-> Siblings: [health-app](https://github.com/limeboy19/health-app) · [fun](https://github.com/limeboy19/fun) · [transit](https://github.com/limeboy19/transit)
+> Part of the **[limeboy.xyz](https://github.com/limeboy19/landing)** project hub.
+> Related: [health-app](https://github.com/limeboy19/health-app) · [fun](https://github.com/limeboy19/fun) · [transit](https://github.com/limeboy19/transit)
 
 A config-driven **Raspberry Pi departure board**. It pulls real-time transit
 departures from one or more agency APIs and renders a clean, full-color "what's
