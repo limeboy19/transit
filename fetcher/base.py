@@ -61,8 +61,11 @@ class FeedResult:
 
     label: str
     departures: list[Departure] = field(default_factory=list)
-    error: Optional[str] = None
+    error: Optional[str] = None       # friendly one-line headline for the board
     feed_type: str = ""
+    error_code: str = ""              # short, stable, reportable (e.g. "NET")
+    hint: str = ""                    # short next-step shown under the headline
+    detail: str = ""                  # full technical text (for the log / /health)
 
     @property
     def ok(self) -> bool:
@@ -126,5 +129,10 @@ class BaseFetcher(ABC):
             return FeedResult(label=self.label, departures=departures,
                               feed_type=self.feed_type)
         except Exception as exc:  # noqa: BLE001 - surface to display, never crash
+            from neterrors import classify_error
+            from errlog import log_error
+            code, headline, hint = classify_error(exc)
+            detail = f"{type(exc).__name__}: {exc}"
+            log_error(self.label, self.feed_type, code, headline, detail)
             return FeedResult(label=self.label, feed_type=self.feed_type,
-                              error=f"{type(exc).__name__}: {exc}")
+                              error=headline, error_code=code, hint=hint, detail=detail)

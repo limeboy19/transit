@@ -214,12 +214,20 @@ def _draw_nyc_flag(draw, x, cy, w, h):
     draw.rectangle([x, top, x + w, top + h], outline=(180, 184, 190), width=1)
 
 
-def _weather_icon(draw, x, y, size, icon, theme: Theme):
-    """Draw a tiny weather glyph in a size×size box at (x, y)."""
+def _weather_icon(draw, x, y, size, icon, theme: Theme, is_day: bool = True):
+    """Draw a tiny weather glyph in a size×size box at (x, y). At night a clear
+    sky shows a crescent moon instead of a sun."""
     sun = _rgb("#F4B400")
     cloud = (170, 180, 190)
     blue = _rgb(theme.accent)
     cx, cy = x + size // 2, y + size // 2
+    if icon == "clear" and not is_day:      # clear night -> crescent moon
+        r = size * 0.32
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=sun)
+        bg = _rgb(theme.band)               # carve the crescent with the band color
+        draw.ellipse([cx - r + r * 0.62, cy - r - r * 0.15,
+                      cx + r + r * 0.62, cy + r - r * 0.15], fill=bg)
+        return
     if icon == "clear":
         r = size * 0.28
         for i in range(8):
@@ -284,7 +292,8 @@ def _draw_header(img, draw, theme: Theme, title: str, weather) -> int:
         temp = f"{weather.temp_f}°"
         draw.text((right, mid), temp, font=f_temp, fill=_rgb(theme.ink), anchor="rm")
         icon_x = right - _tw(draw, temp, f_temp) - 12 - 32
-        _weather_icon(draw, icon_x, mid - 16, 32, weather.icon, theme)
+        _weather_icon(draw, icon_x, mid - 16, 32, weather.icon, theme,
+                      getattr(weather, "is_day", True))
         text_right = icon_x - 12
         if weather.condition:
             draw.text((text_right, mid - 11), weather.condition, font=f_small,
@@ -416,6 +425,33 @@ def _empty(draw, theme, text, x, y, w, h):
               fill=_rgb(theme.muted), anchor="mm")
 
 
+def _warning_glyph(draw, cx, cy, r, color):
+    """A simple hollow warning triangle with an exclamation mark."""
+    draw.polygon([(cx, cy - r), (cx - r * 0.92, cy + r * 0.62), (cx + r * 0.92, cy + r * 0.62)],
+                 outline=color, width=3)
+    draw.line([(cx, cy - r * 0.28), (cx, cy + r * 0.16)], fill=color, width=3)
+    draw.ellipse([cx - 2, cy + r * 0.30, cx + 2, cy + r * 0.30 + 4], fill=color)
+
+
+def _draw_error(draw, theme, result, x, y, w, h):
+    """A readable, reportable error card: warning glyph, friendly headline, a hint,
+    and a small 'code · feed' tag someone can read off and report."""
+    cx = x + w // 2
+    cy = y + h // 2
+    warn = _rgb("#D2932E")
+    _warning_glyph(draw, cx, cy - 46, 20, warn)
+    headline = _truncate(draw, result.error or "Something went wrong",
+                         _font("bold", 27), w - 40)
+    draw.text((cx, cy - 4), headline, font=_font("bold", 27), fill=_rgb(theme.ink), anchor="mm")
+    hint = getattr(result, "hint", "")
+    if hint:
+        draw.text((cx, cy + 28), _truncate(draw, hint, _font("regular", 19), w - 40),
+                  font=_font("regular", 19), fill=_rgb(theme.muted), anchor="mm")
+    code = getattr(result, "error_code", "")
+    tag = f"code {code}  ·  {result.label}" if code else result.label
+    draw.text((cx, cy + 58), tag, font=_font("regular", 15), fill=_rgb(theme.muted), anchor="mm")
+
+
 # ----------------------------------------------------------------- render ----
 
 def render_image(results, config=None, weather=None) -> Image.Image:
@@ -457,8 +493,10 @@ def _render_stacked(draw, results, theme, top, height):
     merged = merged[:max_rows]
 
     if not merged:
-        msg = errors[0].error if errors else "No upcoming departures"
-        _empty(draw, theme, msg, 0, top, WIDTH, height)
+        if errors:
+            _draw_error(draw, theme, errors[0], 0, top, WIDTH, height)
+        else:
+            _empty(draw, theme, "No upcoming departures", 0, top, WIDTH, height)
         return
 
     badge_font = _badge_font(draw, merged, 122, 52)
@@ -488,7 +526,7 @@ def _render_sections(draw, results, theme, top, height):
         rows_top = sy + label_h + 2
         rows_h = section_h - label_h - 4
         if not result.ok:
-            _empty(draw, theme, f"⚠ {result.error}", 18, rows_top, WIDTH - 36, rows_h)
+            _draw_error(draw, theme, result, 18, rows_top, WIDTH - 36, rows_h)
             continue
         if not result.departures:
             _empty(draw, theme, "No upcoming departures", 18, rows_top, WIDTH - 36, rows_h)

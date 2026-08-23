@@ -26,6 +26,7 @@ class Weather:
     condition: str       # short human label, e.g. "Partly cloudy"
     icon: str            # icon group: clear/clouds/fog/rain/snow/storm
     place: str = ""      # city name from the ZIP lookup
+    is_day: bool = True  # False at night, so a clear sky shows a moon not a sun
 
 
 # WMO weather code -> (label, icon group). https://open-meteo.com/en/docs
@@ -83,7 +84,7 @@ def _fetch(zip_code: str) -> Weather | None:
         params={
             "latitude": lat,
             "longitude": lon,
-            "current": "temperature_2m,weather_code",
+            "current": "temperature_2m,weather_code,is_day",
             "temperature_unit": "fahrenheit",
         },
         timeout=8,
@@ -96,4 +97,5 @@ def _fetch(zip_code: str) -> Weather | None:
         condition=label,
         icon=icon,
         place=city,
+        is_day=bool(cur.get("is_day", 1)),
     )

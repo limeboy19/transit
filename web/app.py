@@ -657,6 +657,50 @@ def wifi_status():
     return {"online": netsetup.has_internet(), "supported": netsetup.wifi_supported()}
 
 
+HEALTH = """
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Board health</title>
+<style>
+  body{margin:0;font:15px/1.5 system-ui,sans-serif;background:#11151c;color:#e8edf5;padding:24px}
+  h1{font-size:20px;margin:0 0 2px} .sub{color:#8b97ab;margin:0 0 18px}
+  .pill{display:inline-block;padding:3px 12px;border-radius:20px;font-weight:600;font-size:13px}
+  .ok{background:#12351f;color:#5fd48b} .bad{background:#3a1720;color:#ff8098}
+  table{border-collapse:collapse;width:100%;margin-top:16px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #232c3a;vertical-align:top}
+  th{color:#8b97ab;font-weight:600;font-size:13px}
+  code{background:#0e131b;padding:1px 6px;border-radius:5px;color:#9fb4cf}
+  .c{font-weight:700;color:#ffcf6b} .d{color:#8b97ab;font-size:13px;word-break:break-all}
+  .none{color:#5fd48b;margin-top:18px}
+</style></head><body>
+  <h1>Board health <span class="pill {{ 'ok' if online else 'bad' }}">{{ 'online' if online else 'OFFLINE' }}</span></h1>
+  <p class="sub">Device <code>{{ device }}</code> · {{ errors|length }} recent error(s) · refreshes every 20s</p>
+  {% if errors %}
+  <table>
+    <tr><th>When</th><th>Code</th><th>What</th><th>Feed</th><th>Detail</th></tr>
+    {% for e in errors %}
+    <tr><td>{{ e.time }}</td><td class="c">{{ e.code }}</td><td>{{ e.headline }}</td>
+        <td>{{ e.label }} <code>{{ e.feed }}</code></td><td class="d">{{ e.detail }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="none">✓ No errors recorded since the last restart.</p>{% endif %}
+  <script>setTimeout(function(){location.reload()}, 20000)</script>
+</body></html>
+"""
+
+
+@app.route("/health")
+def health():
+    from errlog import recent_errors
+    try:
+        online = netsetup.has_internet()
+    except Exception:  # noqa: BLE001
+        online = False
+    device = os.environ.get("TRANSIT_DEVICE", "") or "default"
+    return render_template_string(HEALTH, online=online, device=device,
+                                  errors=recent_errors(40))
+
+
 @app.route("/preview.png")
 def preview():
     demo = request.args.get("demo")

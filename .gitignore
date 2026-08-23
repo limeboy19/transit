@@ -16,3 +16,6 @@ config.json
 
 # NJ Transit daily token cache (auto-managed; respects the 10/day token cap)
 .njt_token.json
+
+# runtime error log (see /health)
+error.log
