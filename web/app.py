@@ -27,12 +27,13 @@ if str(ROOT) not in sys.path:
 from flask import Flask, redirect, render_template_string, request, send_file, url_for
 
 import netsetup
-from appconfig import load_config, save_config
+from appconfig import list_devices, load_config, load_config_for, save_config
 from fetcher import FETCHERS, fetch_all
 from geocode import geocode
 from renderer import Display, render_image, simulate_eink
 from renderer.demo import sample_results, sample_stacked
-from renderer.display import PREVIEW_PATH
+from renderer.display import ASSETS_DIR, PREVIEW_PATH, _is_gameday
+from renderer.themes import resolve_theme
 from weather import get_weather
 
 app = Flask(__name__)
@@ -94,8 +95,23 @@ ADMIN = """
   <div class="grid">
     <div>
       <div class="pbar">
-        <b>Live previews — one board per feed</b>
+        <b>Live preview{{ '' if merged else 's' }} — this device's board</b>
       </div>
+      {% if merged %}
+      <div class="card preview" style="margin-bottom:16px">
+        <div class="pbar">
+          <b>{{ board_label }}</b>
+          <span class="links">
+            <span class="pill">{{ feeds|length }} feeds · merged</span>
+            <a href="{{ url_for('display_feed', idx=0) }}?merge=1" target="_blank">open ↗</a>
+            <a href="{{ url_for('preview') }}?merge=1&dither=1&t={{ cb }}" target="_blank">6-color</a>
+          </span>
+        </div>
+        <img src="{{ url_for('preview') }}?merge=1&t={{ cb }}" alt="{{ board_label }} board" loading="lazy">
+      </div>
+      <p class="small">This device has several feeds (e.g. PATH + NJT) — they merge
+         into one board, soonest-first. Edit each feed's stops in the cards on the right.</p>
+      {% else %}
       {% for feed in feeds %}
       <div class="card preview {{ '' if feed.enabled else 'off' }}" id="preview-{{ loop.index0 }}" style="margin-bottom:16px">
         <div class="pbar">
@@ -110,9 +126,9 @@ ADMIN = """
              alt="{{ feed.label }} preview" loading="lazy">
       </div>
       {% endfor %}
-      <p class="small">Each board is what that person's 800×480 e-ink panel shows —
-         its own city colors, time zone, and weather. "6-color panel" simulates
-         the real dithered hardware output.</p>
+      <p class="small">Each board is what that person's 800×480 panel shows — its own
+         colors, time zone, and weather. "6-color panel" simulates dithered output.</p>
+      {% endif %}
     </div>
 
     <form method="post" action="{{ url_for('save') }}" class="card">
@@ -259,11 +275,27 @@ DISPLAY = """
 <title>{{ title }}</title>
 <style>
   html,body{margin:0;height:100%;background:#111;display:flex;align-items:center;justify-content:center;overflow:hidden}
-  img{width:100vw;height:100vh;object-fit:contain;display:block}
+  .stage{position:relative;width:min(100vw,166.667vh);aspect-ratio:800/480;container-type:size}
+  .board{width:100%;height:100%;object-fit:contain;display:block}
+  /* game-day overlay: the GIF box is centered on the header's vertical mid (so it
+     lines up with the weather + logo); GAME DAY hangs below, centered under the
+     "GO PACK GO" words (which sit right-of-box-center because of the # hashtag). */
+  .gd{position:absolute;left:48.8%;top:12%;transform:translate(-50%,-50%);pointer-events:none}
+  .gd img{width:21cqw;display:block}
+  .gd .label{position:absolute;left:61.4%;top:100%;transform:translateX(-50%);margin-top:.5cqh;
+      white-space:nowrap;color:#FFB612;font:800 2.3cqh/1 system-ui,sans-serif;letter-spacing:.14em}
 </style></head><body>
-<img id="d" src="{{ img_url }}&t={{ cb }}">
+<div class="stage">
+  <img id="d" class="board" src="{{ img_url }}&t={{ cb }}">
+  {% if gameday and gif_url %}
+  <div class="gd">
+    <img src="{{ gif_url }}" alt="GO PACK GO">
+    <div class="label">GAME DAY</div>
+  </div>
+  {% endif %}
+</div>
 <script>
-  // refresh the image periodically so this mirrors the panel
+  // refresh the board image periodically so this mirrors the panel
   setInterval(function(){
     document.getElementById('d').src='{{ img_url }}&t='+Date.now();
   }, {{ refresh_ms }});
@@ -453,11 +485,14 @@ def _feeds_for_form(config):
 @app.route("/")
 def index():
     config = load_config()
+    feeds = _feeds_for_form(config)
+    board_label = next((f["label"] for f in feeds if f.get("label")), "") or "This board"
     return render_template_string(
-        ADMIN, config=config, feeds=_feeds_for_form(config),
+        ADMIN, config=config, feeds=feeds,
         feed_types=sorted(FETCHERS),
         mode="Raspberry Pi (Inky)" if _display.on_pi else "dev (preview.png)",
         cb=int(time.time()),
+        merged=len(feeds) > 1, board_label=board_label,
     )
 
 
@@ -471,17 +506,130 @@ def display_index():
 
 @app.route("/display/<int:idx>")
 def display_feed(idx):
-    config = load_config()
+    device = request.args.get("device")
+    merge = request.args.get("merge")
+    config = load_config_for(device) if device else load_config()
     feeds = config.get("feeds", [])
-    feed = feeds[idx] if 0 <= idx < len(feeds) else {}
-    label = feed.get("label") or "Transit Display"
+    dev_q = f"&device={device}" if device else ""
+    if merge or len(feeds) > 1:  # a device with several feeds -> one merged board
+        label = next((f.get("label") for f in feeds if f.get("label")), "Transit Display")
+        img_url = url_for("preview") + "?merge=1" + dev_q
+        refresh = min([_feed_refresh(f) for f in feeds], default=60)
+    else:
+        feed = feeds[idx] if 0 <= idx < len(feeds) else {}
+        label = feed.get("label") or "Transit Display"
+        img_url = url_for("preview") + f"?feed={idx}" + dev_q
+        refresh = _feed_refresh(feed)
+
+    # game day: overlay the live animated graphic on top of the board (browser only)
+    theme = resolve_theme(config, [])
+    gameday = bool(theme.gameday_team and theme.gameday_img
+                   and _is_gameday(theme.gameday_team, theme.tz))
+    override = request.args.get("gameday")   # ?gameday=1/0 to force on/off for previewing
+    if override == "1":
+        gameday = bool(theme.gameday_img)
+    elif override == "0":
+        gameday = False
+    gif_url = (url_for("gameday_gif") + (f"?device={device}" if device else "")) if gameday else ""
+
     return render_template_string(
-        DISPLAY,
-        title=label,
-        img_url=url_for("preview") + f"?feed={idx}",
-        cb=int(time.time()),
-        refresh_ms=_feed_refresh(feed) * 1000,
+        DISPLAY, title=label, img_url=img_url,
+        cb=int(time.time()), refresh_ms=refresh * 1000,
+        gameday=gameday, gif_url=gif_url,
     )
+
+
+_GD_GIF_CACHE: dict = {}
+
+
+def _trim_gif(name: str) -> bytes:
+    """Crop an animated GIF to its content (drops big transparent margins) so it can
+    be sized nicely as an overlay. Returns animated GIF bytes, or b'' on failure."""
+    from io import BytesIO
+    from PIL import Image, ImageSequence
+    try:
+        im = Image.open(ASSETS_DIR / name)
+        union = None
+        for fr in ImageSequence.Iterator(im):
+            bb = fr.convert("RGBA").getbbox()
+            if bb:
+                union = bb if union is None else (
+                    min(union[0], bb[0]), min(union[1], bb[1]),
+                    max(union[2], bb[2]), max(union[3], bb[3]))
+        if not union:
+            return b""
+        frames, durations = [], []
+        for fr in ImageSequence.Iterator(im):
+            rgba = fr.convert("RGBA").crop(union)
+            durations.append(fr.info.get("duration", im.info.get("duration", 300)))
+            alpha = rgba.split()[3]
+            p = rgba.convert("RGB").convert("P", palette=Image.ADAPTIVE, colors=255)
+            p.paste(255, alpha.point(lambda v: 255 if v < 128 else 0))  # index 255 = clear
+            p.info["transparency"] = 255
+            frames.append(p)
+        buf = BytesIO()
+        frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:],
+                       duration=durations, loop=0, transparency=255, disposal=2)
+        return buf.getvalue()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[gameday] gif trim failed: {exc}")
+        return b""
+
+
+@app.route("/gameday.gif")
+def gameday_gif():
+    device = request.args.get("device") or ""
+    if device not in _GD_GIF_CACHE:
+        config = load_config_for(device) if device else load_config()
+        theme = resolve_theme(config, [])
+        _GD_GIF_CACHE[device] = _trim_gif(theme.gameday_img) if theme.gameday_img else b""
+    data = _GD_GIF_CACHE[device]
+    if not data:
+        return ("", 404)
+    return app.response_class(data, mimetype="image/gif")
+
+
+DEVICES_DASH = """
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>All Setups</title>
+<style>
+  body{margin:0;font:15px/1.5 system-ui,sans-serif;background:#11151c;color:#e8edf5;padding:24px}
+  h1{font-size:21px;margin:0 0 4px} .sub{color:#8b97ab;margin:0 0 20px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:20px}
+  .card{background:#1b2230;border:1px solid #2c3547;border-radius:12px;padding:14px}
+  .card h2{font-size:17px;margin:0 0 2px} .card .id{color:#8b97ab;font-size:13px;margin:0 0 10px}
+  .card img{width:100%;border-radius:8px;border:1px solid #2c3547;display:block;background:#fff}
+  .links{margin-top:10px;display:flex;gap:16px}
+  a{color:#5aa9f8;text-decoration:none} a:hover{text-decoration:underline}
+  code{background:#0e131b;padding:1px 6px;border-radius:5px;color:#9fb4cf}
+</style></head><body>
+  <h1>All setups</h1>
+  <p class="sub">Every device config in <code>devices/</code>, live preview. Dev-machine view.</p>
+  <div class="grid">
+    {% for d in devices %}
+    <div class="card">
+      <h2>{{ d.label }}</h2>
+      <p class="id"><code>devices/{{ d.id }}.json</code> · {{ d.feed_count }} board(s)</p>
+      <img src="{{ url_for('preview') }}?device={{ d.id }}&{{ 'merge=1' if d.merge else 'feed=0' }}&t={{ cb }}" loading="lazy" alt="{{ d.label }}">
+      <div class="links"><a href="{{ url_for('display_feed', idx=0) }}?device={{ d.id }}{{ '&merge=1' if d.merge else '' }}" target="_blank">open board ↗</a></div>
+    </div>
+    {% endfor %}
+  </div>
+</body></html>
+"""
+
+
+@app.route("/devices")
+def devices_dashboard():
+    devs = []
+    for did in list_devices():
+        if did == "example":
+            continue
+        feeds = load_config_for(did).get("feeds", [])
+        devs.append({"id": did, "feed_count": len(feeds), "merge": len(feeds) > 1,
+                     "label": (feeds[0].get("label") if feeds else "") or did})
+    return render_template_string(DEVICES_DASH, devices=devs, cb=int(time.time()))
 
 
 def _feed_refresh(feed: dict) -> int:
@@ -621,7 +769,28 @@ def _render_single_feed(config, idx, dither):
         "vars": config.get("vars", {}),
     }
     results = fetch_all(single)
-    img = render_image(results, single, get_weather(single))
+    try:
+        weather = get_weather(single)
+    except Exception:  # noqa: BLE001 - weather is decorative; never fail the board
+        weather = None
+    img = render_image(results, single, weather)
+    return simulate_eink(img) if dither else img
+
+
+def _render_merged(config, dither):
+    """One board merging EVERY enabled feed, soonest-first (e.g. PATH + light
+    rail + bus). Title + weather come from the first feed that defines them."""
+    feeds = config.get("feeds", [])
+    title = next((f.get("label") for f in feeds if f.get("label")), "")
+    zip_code = next((f.get("zip") for f in feeds if f.get("zip")), "")
+    merged = {**config, "title": title, "display": {"mode": "stacked"},
+              "weather": {"enabled": bool(zip_code), "zip": zip_code}}
+    results = fetch_all(merged)
+    try:
+        weather = get_weather(merged)
+    except Exception:  # noqa: BLE001
+        weather = None
+    img = render_image(results, merged, weather)
     return simulate_eink(img) if dither else img
 
 
@@ -706,13 +875,21 @@ def preview():
     demo = request.args.get("demo")
     dither = request.args.get("dither") == "1"
     feed_param = request.args.get("feed")
-    config = load_config()
+    device = request.args.get("device")  # preview a specific device's config
+    config = load_config_for(device) if device else load_config()
+
+    if request.args.get("merge"):        # all feeds merged onto one board
+        return _png(_render_merged(config, dither))
 
     if feed_param is not None:
         try:
-            return _png(_render_single_feed(config, int(feed_param), dither))
+            idx = int(feed_param)
         except (ValueError, TypeError):
-            pass
+            idx = None
+        if idx is not None:
+            # a specific feed/device was requested -> render exactly that. Never
+            # fall through to the shared preview.png (that's another config's board).
+            return _png(_render_single_feed(config, idx, dither))
 
     if demo:
         # render sample data without touching live APIs or the saved preview

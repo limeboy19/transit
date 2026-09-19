@@ -14,6 +14,8 @@ from .base import BaseFetcher, Departure, FeedResult
 from .cta import CTAFetcher
 from .mta import MTAFetcher
 from .njt import NJTFetcher
+from .njtbus import NJTBusFetcher
+from .path import PATHFetcher
 
 _VAR_RE = re.compile(r"\$\{([A-Za-z0-9_]+)\}")
 
@@ -52,6 +54,8 @@ FETCHERS: dict[str, type[BaseFetcher]] = {
     CTAFetcher.feed_type: CTAFetcher,
     MTAFetcher.feed_type: MTAFetcher,
     NJTFetcher.feed_type: NJTFetcher,
+    NJTBusFetcher.feed_type: NJTBusFetcher,
+    PATHFetcher.feed_type: PATHFetcher,
 }
 
 

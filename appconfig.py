@@ -61,16 +61,8 @@ DEFAULT_CONFIG = {
 }
 
 
-def load_config() -> dict:
-    """Load the active config (device file in git, or local config.json)."""
-    path = _active_config_path()
-    # seed only the legacy local config.json from the example on first run;
-    # device files are expected to live in git.
-    if path == CONFIG_PATH and not path.exists() and EXAMPLE_PATH.exists():
-        try:
-            path.write_text(EXAMPLE_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-        except OSError:
-            pass
+def _load_from_path(path: Path) -> dict:
+    """Read one config file and merge it over the defaults."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -83,6 +75,32 @@ def load_config() -> dict:
     merged.setdefault("key_vault_url", "")
     merged.setdefault("off_hours", "")
     return merged
+
+
+def load_config() -> dict:
+    """Load the active config (device file in git, or local config.json)."""
+    path = _active_config_path()
+    # seed only the legacy local config.json from the example on first run;
+    # device files are expected to live in git.
+    if path == CONFIG_PATH and not path.exists() and EXAMPLE_PATH.exists():
+        try:
+            path.write_text(EXAMPLE_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError:
+            pass
+    return _load_from_path(path)
+
+
+def list_devices() -> list[str]:
+    """Device ids that have a config file in devices/ (sorted). For the
+    dev-machine 'view all setups' dashboard."""
+    if not DEVICES_DIR.exists():
+        return []
+    return sorted(p.stem for p in DEVICES_DIR.glob("*.json"))
+
+
+def load_config_for(device_id: str) -> dict:
+    """Load a specific device's config by id (devices/<id>.json)."""
+    return _load_from_path(DEVICES_DIR / f"{device_id}.json")
 
 
 def save_config(config: dict) -> None:

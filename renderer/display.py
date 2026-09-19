@@ -85,6 +85,119 @@ def _emblem_image(name: str, height: int):
         print(f"[display] emblem '{name}' failed: {exc}")
     _EMBLEM_CACHE[key] = img
     return img
+
+
+_SIL_CACHE: dict = {}
+
+
+def _silhouette_image(name: str, color, height: int):
+    """Load assets/<name>, recolor its shape to `color` on a transparent background,
+    scaled to `height` px. Works for black-on-white art or already-transparent PNGs."""
+    key = (name, tuple(color), height)
+    if key in _SIL_CACHE:
+        return _SIL_CACHE[key]
+    out = None
+    try:
+        im = Image.open(ASSETS_DIR / name).convert("RGBA")
+        r, g, b, a = im.split()
+        if a.getextrema()[0] == 255:      # opaque (black-on-white) -> mask by darkness
+            mask = Image.merge("RGB", (r, g, b)).convert("L").point(lambda v: 255 - v)
+        else:                             # already transparent -> keep its own alpha
+            mask = a
+        solid = Image.new("RGBA", im.size, tuple(color) + (255,))
+        solid.putalpha(mask)
+        solid = solid.crop(solid.getbbox() or (0, 0, im.width, im.height))
+        w = max(1, round(solid.width * height / solid.height))
+        out = solid.resize((w, height), Image.LANCZOS)
+    except Exception as exc:  # noqa: BLE001 - missing/corrupt asset -> no silhouette
+        print(f"[display] silhouette '{name}' failed: {exc}")
+    _SIL_CACHE[key] = out
+    return out
+
+
+def _splayed_antlers(name: str, color, height: int, deg: int = 12, overlap: int = 18,
+                     center_clear: int = 14):
+    """Recolor the antler art, split it down the middle and rotate each half
+    outward, so the rack splays like a real moose and lifts off the title text.
+    ``center_clear`` erases a central strip to drop the inner base curls."""
+    key = ("splay", name, tuple(color), height, deg, overlap, center_clear)
+    if key in _SIL_CACHE:
+        return _SIL_CACHE[key]
+    base = _silhouette_image(name, color, height)
+    out = None
+    if base is not None:
+        w, h = base.size
+        m = w // 2
+        left = base.crop((0, 0, m, h)).rotate(deg, expand=True, resample=Image.BICUBIC)
+        right = base.crop((m, 0, w, h)).rotate(-deg, expand=True, resample=Image.BICUBIC)
+        cw, ch = left.width + right.width - overlap, max(left.height, right.height)
+        canvas = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
+        canvas.alpha_composite(left, (0, ch - left.height))
+        canvas.alpha_composite(right, (cw - right.width, ch - right.height))
+        if center_clear > 0:          # erase the inner base curls at the center
+            px = canvas.load()
+            cx = canvas.width // 2
+            for x in range(max(0, cx - center_clear), min(canvas.width, cx + center_clear)):
+                for y in range(canvas.height):
+                    r, g, b, _ = px[x, y]
+                    px[x, y] = (r, g, b, 0)
+        out = canvas.crop(canvas.getbbox() or (0, 0, cw, ch))
+    _SIL_CACHE[key] = out
+    return out
+
+
+def _knockout_image(name: str, height: int):
+    """Load assets/<name> keeping its colors but making a near-white background
+    transparent, scaled to `height` px. Cached in _SIL_CACHE under a distinct key."""
+    key = ("knock", name, height)
+    if key in _SIL_CACHE:
+        return _SIL_CACHE[key]
+    out = None
+    try:
+        im = Image.open(ASSETS_DIR / name).convert("RGBA")
+        data = [(r, g, b, 0) if (r > 238 and g > 238 and b > 238) else (r, g, b, a)
+                for (r, g, b, a) in im.getdata()]
+        im.putdata(data)
+        im = im.crop(im.getbbox() or (0, 0, im.width, im.height))
+        w = max(1, round(im.width * height / im.height))
+        out = im.resize((w, height), Image.LANCZOS)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[display] knockout '{name}' failed: {exc}")
+    _SIL_CACHE[key] = out
+    return out
+
+
+_GAMEDAY_CACHE: dict = {}
+
+
+def _is_gameday(team_id: str, tz: str) -> bool:
+    """True if the ESPN NFL team plays today (its local calendar day). Best-effort,
+    cached ~3h so renders don't hit the network each time; any failure -> False."""
+    import time
+    now = time.time()
+    hit = _GAMEDAY_CACHE.get(team_id)
+    if hit and now - hit[0] < 3 * 3600:
+        dates = hit[1]
+    else:
+        dates = set()
+        try:
+            import requests
+            url = ("https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/"
+                   f"{team_id}/schedule")
+            data = requests.get(url, timeout=6).json()
+            for ev in data.get("events", []):
+                raw = ev.get("date")
+                if not raw:
+                    continue
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                if ZoneInfo and tz:
+                    dt = dt.astimezone(ZoneInfo(tz))
+                dates.add(dt.date().isoformat())
+        except Exception as exc:  # noqa: BLE001
+            print(f"[display] gameday check failed: {exc}")
+        _GAMEDAY_CACHE[team_id] = (now, dates)
+    today = (datetime.now(ZoneInfo(tz)) if (ZoneInfo and tz) else datetime.now()).date()
+    return today.isoformat() in dates
 ICON_BUS = ""     # fa-bus
 ICON_TRAIN = ""   # fa-train-subway
 
@@ -215,11 +328,14 @@ def _draw_nyc_flag(draw, x, cy, w, h):
 
 
 def _weather_icon(draw, x, y, size, icon, theme: Theme, is_day: bool = True):
-    """Draw a tiny weather glyph in a size×size box at (x, y). At night a clear
-    sky shows a crescent moon instead of a sun."""
-    sun = _rgb("#F4B400")
-    cloud = (170, 180, 190)
-    blue = _rgb(theme.accent)
+    """Draw a tiny weather glyph. Defaults (amber sun, grey cloud) read on light
+    bands; a theme may set ``weather_icon`` to force ONE dark color where the
+    amber sun would vanish (e.g. a gold band) — that override is per-device, so
+    only boards that ask for it change. At night a clear sky shows a moon."""
+    override = _rgb(theme.weather_icon) if theme.weather_icon else None
+    sun = override or _rgb("#F4B400")
+    cloud = override or (170, 180, 190)
+    accent = override or _rgb(theme.accent)
     cx, cy = x + size // 2, y + size // 2
     if icon == "clear" and not is_day:      # clear night -> crescent moon
         r = size * 0.32
@@ -229,9 +345,9 @@ def _weather_icon(draw, x, y, size, icon, theme: Theme, is_day: bool = True):
                       cx + r + r * 0.62, cy + r - r * 0.15], fill=bg)
         return
     if icon == "clear":
+        import math
         r = size * 0.28
         for i in range(8):
-            import math
             a = i * math.pi / 4
             draw.line([(cx + math.cos(a) * r * 1.3, cy + math.sin(a) * r * 1.3),
                        (cx + math.cos(a) * r * 1.9, cy + math.sin(a) * r * 1.9)],
@@ -245,30 +361,111 @@ def _weather_icon(draw, x, y, size, icon, theme: Theme, is_day: bool = True):
     if icon == "rain":
         for dx in (0.35, 0.55, 0.75):
             draw.line([(x + size * dx, cy + size * 0.34), (x + size * dx - 3, y + size - 2)],
-                      fill=blue, width=2)
+                      fill=accent, width=2)
     elif icon == "snow":
         for dx in (0.35, 0.55, 0.75):
             draw.ellipse([x + size * dx - 2, y + size - 8, x + size * dx + 2, y + size - 4],
-                         fill=blue)
+                         fill=accent)
     elif icon == "storm":
-        draw.line([(cx, cy + size * 0.30), (cx - 4, y + size - 2)], fill=_rgb("#F4B400"), width=3)
+        draw.line([(cx, cy + size * 0.30), (cx - 4, y + size - 2)], fill=sun, width=3)
+
+
+def _draw_antler(draw, cx, by, d, color, sx, sy):
+    """One broad palmate antler (a filled paddle with finger tines) sweeping out
+    from the center. d=+1 is the right side, d=-1 the left; sx/sy scale it."""
+    def p(ux, uy):                     # units -> pixels (x mirrors on d, y is up)
+        return (cx + d * ux * sx, by - uy * sy)
+    # outline: inner base -> smooth lower edge outward -> tined top edge back in
+    pts = [p(1.5, 0), p(7, 1.5), p(13, 3), p(18.5, 4.5), p(22, 8.5),
+           p(20.5, 9.5), p(21.5, 15.5),      # outer finger
+           p(18, 9.5), p(18, 16.5),          # finger
+           p(14.5, 9), p(13.5, 17.5),        # tall middle finger
+           p(10, 8.5), p(8.5, 14.5),         # finger
+           p(5.5, 8), p(4, 12),              # inner finger
+           p(2, 6.5)]                        # inner top
+    draw.polygon(pts, fill=color)
+
+
+def _draw_moose(draw, x_before, wo, mid, color):
+    """Turn the 'oo' of a title into a moose: the two o's are the eyes, and a wide
+    symmetric antler rack sits above them."""
+    cx = x_before + wo                 # center between the two 'o' eyes
+    by = mid - 10                      # antlers rise from just above the eyes
+    sx, sy = wo / 15.0 * 1.1, wo / 15.0
+    _draw_antler(draw, cx, by, -1, color, sx, sy)
+    _draw_antler(draw, cx, by, +1, color, sx, sy)
+
+
+def _draw_gameday(img, draw, theme: Theme, head_h: int, accent):
+    """Game-day splash across the middle of the header: the team graphic (e.g.
+    GO PACK GO) with a small 'GAME DAY' label beneath it."""
+    cx = 438                                   # middle band, clear of title/weather
+    gold = _rgb(theme.band_stripe or theme.accent)
+    gd = _knockout_image(theme.gameday_img, int(head_h * 0.5)) if theme.gameday_img else None
+    if gd is not None:
+        if gd.width > 300:                     # keep it inside the middle band
+            gd = gd.resize((300, max(1, round(gd.height * 300 / gd.width))), Image.LANCZOS)
+        gy = max(4, (head_h - gd.height - 16) // 2)
+        img.paste(gd, (int(cx - gd.width / 2), gy), gd)
+        draw.text((cx, gy + gd.height + 3), "GAME DAY", font=_font("bold", 14),
+                  fill=gold, anchor="mm")
+    else:                                      # graphic not supplied yet -> text only
+        draw.text((cx, head_h // 2 - 9), "GO PACK GO", font=_font("bold", 24),
+                  fill=accent, anchor="mm")
+        draw.text((cx, head_h // 2 + 12), "GAME DAY", font=_font("bold", 13),
+                  fill=gold, anchor="mm")
 
 
 def _draw_header(img, draw, theme: Theme, title: str, weather) -> int:
-    head_h = 84
-    mid = head_h // 2
+    head_h = theme.header_h or 84
+    s = head_h / 84.0            # scale header content up on taller headers (Advait=1.0)
+    mid = head_h // 2 + round((head_h - 84) * 0.3)   # nudge content down on taller headers
     draw.rectangle([0, 0, WIDTH, head_h], fill=_rgb(theme.band))
     accent = _rgb(theme.accent)
 
     # title (left, vertically centered in the header band)
-    f_title = _font("bold", 34)
+    f_title = _font("bold", round(34 * s))
     title = _truncate(draw, title, f_title, 480)
+
+    # turn the "oo" into a moose: the antler rack is drawn BEHIND the text and
+    # dropped down to the eyes, so the 'oo' render in front of it (flush, not
+    # floating high above). Prefer the silhouette asset; fall back to drawn antlers.
+    if theme.moose_head:
+        i = title.lower().find("oo")
+        if i != -1:
+            xb = 22 + _tw(draw, title[:i], f_title)
+            wo = _tw(draw, "o", f_title)
+            em = (_splayed_antlers(theme.antler_img, accent, max(18, int((head_h // 2 - 4) * 0.9 * s)))
+                  if theme.antler_img else None)
+            if em is not None:
+                ax = int(xb + wo - em.width / 2) + round(6 * s)   # nudged slightly right
+                ay = (mid + 8) - em.height
+                # reveal only the antlers ABOVE the top of the 'oo'; clip anything
+                # behind/below the eyes so the rack emerges cleanly from the eye line
+                o_top = draw.textbbox((xb, mid), "o", font=f_title, anchor="lm")[1]
+                keep = max(0, min(em.height, o_top - ay))
+                if keep:
+                    top = em.crop((0, 0, em.width, keep))
+                    # place the two antlers separately so the right one can be pulled
+                    # inward while the left one stays exactly where it is
+                    cxm = top.width // 2
+                    pull = round(10 * s)
+                    left_half = top.crop((0, 0, cxm, top.height))
+                    right_half = top.crop((cxm, 0, top.width, top.height))
+                    img.paste(left_half, (ax, ay), left_half)
+                    img.paste(right_half, (ax + cxm - pull, ay), right_half)
+            else:
+                _draw_moose(draw, xb, wo, mid, accent)
+
     draw.text((22, mid), title, font=f_title, fill=accent, anchor="lm")
+
+    # game day (surprise): the animated GO PACK GO graphic is overlaid live by the
+    # browser display page (see web/app.py); nothing is baked into the static board.
 
     # city emblem next to the title (same vertical center)
     emblem_x = 22 + _tw(draw, title, f_title) + 22
     if theme.emblem == "image" and theme.emblem_img:
-        em = _emblem_image(theme.emblem_img, 66)
+        em = _emblem_image(theme.emblem_img, round(66 * s))
         if em is not None and emblem_x + em.width < 520:
             img.paste(em, (emblem_x, mid - em.height // 2), em)
     elif theme.emblem == "stars" and theme.stars:
@@ -283,27 +480,35 @@ def _draw_header(img, draw, theme: Theme, title: str, weather) -> int:
 
     # right cluster: [condition / time]  [icon]  [temp]  — laid out horizontally
     # so it doesn't feel crowded stacked vertically.
-    f_temp = _font("bold", 32)
-    f_small = _font("regular", 17)
+    f_temp = _font("bold", round(32 * s))
+    f_small = _font("regular", round(17 * s))
     clock = _clock(theme.tz, theme.tz_label)
+    icon_sz = round(32 * s)
+    gap = round(12 * s)
+    yoff = round(11 * s)
 
     right = WIDTH - 22
     if weather is not None:
         temp = f"{weather.temp_f}°"
-        draw.text((right, mid), temp, font=f_temp, fill=_rgb(theme.ink), anchor="rm")
-        icon_x = right - _tw(draw, temp, f_temp) - 12 - 32
-        _weather_icon(draw, icon_x, mid - 16, 32, weather.icon, theme,
+        temp_fill = _rgb(theme.temp_color) if theme.temp_color else _rgb(theme.ink)
+        draw.text((right, mid), temp, font=f_temp, fill=temp_fill, anchor="rm")
+        icon_x = right - _tw(draw, temp, f_temp) - gap - icon_sz
+        _weather_icon(draw, icon_x, mid - icon_sz // 2, icon_sz, weather.icon, theme,
                       getattr(weather, "is_day", True))
-        text_right = icon_x - 12
+        text_right = icon_x - gap
         if weather.condition:
-            draw.text((text_right, mid - 11), weather.condition, font=f_small,
+            draw.text((text_right, mid - yoff), weather.condition, font=f_small,
                       fill=_rgb(theme.muted), anchor="rm")
-        draw.text((text_right, mid + 11), clock, font=f_small,
+        draw.text((text_right, mid + yoff), clock, font=f_small,
                   fill=_rgb(theme.muted), anchor="rm")
     else:
         draw.text((right, mid), clock, font=f_temp, fill=_rgb(theme.muted), anchor="rm")
 
-    draw.rectangle([0, head_h, WIDTH, head_h + 4], fill=accent)
+    if theme.band_stripe:  # two-tone divider (e.g. green + gold)
+        draw.rectangle([0, head_h, WIDTH, head_h + 3], fill=accent)
+        draw.rectangle([0, head_h + 3, WIDTH, head_h + 6], fill=_rgb(theme.band_stripe))
+    else:
+        draw.rectangle([0, head_h, WIDTH, head_h + 4], fill=accent)
     return head_h + 4
 
 
@@ -346,13 +551,28 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
 
     # route badge (shared font across the board for consistent sizing)
     badge_w, badge_h = 122, h - 18
-    badge_color = _rgb(dep.color) if dep.color else _rgb(theme.accent)
+    if dep.color and not theme.flat_badges:
+        badge_color = _rgb(dep.color)
+    elif dep.icon_label and theme.lr_color:  # light-rail rows get their own badge color
+        badge_color = _rgb(theme.lr_color)
+    else:  # differentiate bus vs rail badges when the feed sets no route color
+        badge_color = _rgb((theme.bus_color if dep.mode == "bus" else theme.rail_color)
+                           or theme.accent)
     draw.rounded_rectangle([x + pad, y + 9, x + pad + badge_w, y + 9 + badge_h],
                            radius=10, fill=badge_color)
-    f_route = route_font or _fit_font(draw, dep.route, "bold", badge_w - 16,
-                                      min(52, badge_h - 4), 16)
-    draw.text((x + pad + badge_w // 2, cy), dep.route, font=f_route,
-              fill=_contrast(badge_color), anchor="mm")
+    badge_cx = x + pad + badge_w // 2
+    if dep.icon_label:  # e.g. light rail: route on top, tiny caption inside the tab
+        f_route = _fit_font(draw, dep.route, "bold", badge_w - 16,
+                            min(38, badge_h - 22), 16)
+        draw.text((badge_cx, cy - 9), dep.route, font=f_route,
+                  fill=_contrast(badge_color), anchor="mm")
+        draw.text((badge_cx, cy + 16), dep.icon_label.upper(), font=_font("bold", 11),
+                  fill=_contrast(badge_color), anchor="mm")
+    else:
+        f_route = route_font or _fit_font(draw, dep.route, "bold", badge_w - 16,
+                                          min(52, badge_h - 4), 16)
+        draw.text((badge_cx, cy), dep.route, font=f_route,
+                  fill=_contrast(badge_color), anchor="mm")
 
     # secondary label shown inline, to the right of the destination
     sub = []
@@ -369,11 +589,18 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
     dest_x = x + pad + badge_w + pad
     icon_char = ICON_BUS if dep.mode == "bus" else ICON_TRAIN
     ic_font = _icon_font(36)
-    draw.text((dest_x, cy), icon_char, font=ic_font, fill=_rgb(theme.muted), anchor="lm")
-    dest_x += _tw(draw, icon_char, ic_font) + 14
+    # center the icon in a FIXED-WIDTH column so bus & train glyphs line up and
+    # the text after them starts at the same x on every row (their widths differ)
+    icon_col = 42
+    draw.text((dest_x + icon_col // 2, cy), icon_char, font=ic_font,
+              fill=_rgb(theme.muted), anchor="mm")
+    dest_x += icon_col + 10
     f_to = _font("regular", 18)
-    f_dest = _font("bold", 34)
-    content_right = x + w - pad - 170        # reserve room for the ETA on the right
+    # fit_destination boards trade a touch of ETA whitespace + a slightly smaller
+    # destination/stop label for room, so full names fit instead of truncating.
+    f_dest = _font("bold", 30 if theme.fit_destination else 34)
+    f_sub = _font("regular", 16) if theme.fit_destination else f_to
+    content_right = x + w - pad - (150 if theme.fit_destination else 170)
 
     # primary label: a compass + direction (opt-in, buses) OR "to <destination>"
     if dep.direction:
@@ -387,10 +614,12 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
         prefix_w = _tw(draw, "to ", f_to)
 
     avail = content_right - prim_x - prefix_w
-    if sub_text:  # primary text gets priority; the stop label takes the remainder
+    if sub_text and not theme.fit_destination:
+        # normally the stop label reserves space; the destination takes the rest
         stop_reserve = min(120, max(70, int(avail * 0.38)))
         prim_budget = avail - stop_reserve - 12
     else:
+        # fit_destination: destination gets the full width; stop label takes leftovers
         prim_budget = avail
 
     if not dep.direction:
@@ -401,8 +630,8 @@ def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
     if sub_text:
         sx = prim_x + prefix_w + _tw(draw, primary, f_dest) + 16
         if content_right - sx > 36:
-            draw.text((sx, cy + 1), _truncate(draw, sub_text, f_to, content_right - sx),
-                      font=f_to, fill=_rgb(theme.muted), anchor="lm")
+            draw.text((sx, cy + 2), _truncate(draw, sub_text, f_sub, content_right - sx),
+                      font=f_sub, fill=_rgb(theme.muted), anchor="lm")
 
     # ETA (right)
     eta = dep.eta_label
@@ -435,7 +664,7 @@ def _warning_glyph(draw, cx, cy, r, color):
 
 def _draw_error(draw, theme, result, x, y, w, h):
     """A readable, reportable error card: warning glyph, friendly headline, a hint,
-    and a small 'code · feed' tag someone can read off and report."""
+    and a small 'code · feed' tag Advait can read off and text to Emil."""
     cx = x + w // 2
     cy = y + h // 2
     warn = _rgb("#D2932E")

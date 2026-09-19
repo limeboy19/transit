@@ -14,8 +14,9 @@ config.json
 .env
 *.env
 
-# NJ Transit daily token cache (auto-managed; respects the 10/day token cap)
+# NJ Transit daily token caches (auto-managed; protect the mint rate-limit)
 .njt_token.json
+.njtbus_token.json
 
 # runtime error log (see /health)
 error.log

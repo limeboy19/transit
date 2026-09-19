@@ -30,6 +30,7 @@ class Departure:
     stop_name: str = ""             # which stop this came from (for multi-stop boards)
     direction: str = ""             # e.g. "Northbound"; when set, the row shows a
                                     # compass + direction instead of "to <destination>"
+    icon_label: str = ""            # tiny subtle caption under the row icon (e.g. "Light Rail")
 
     @property
     def eta_label(self) -> str:
@@ -123,6 +124,11 @@ class BaseFetcher(ABC):
         """Run :meth:`fetch`, catching everything so the loop never dies."""
         try:
             departures = self.fetch()
+            # optional per-feed destination filter: keep only departures whose
+            # destination contains this text, e.g. "filter": "Tonnelle".
+            keep = str(self.config.get("filter", "")).strip().lower()
+            if keep:
+                departures = [d for d in departures if keep in (d.destination or "").lower()]
             for dep in departures:
                 dep.feed_type = self.feed_type
             departures = sorted(departures, key=lambda d: d.sort_key)[: self.limit]
