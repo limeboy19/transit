@@ -66,6 +66,36 @@ def screen_state(config: dict, now: datetime | None = None) -> str:
     return "off" if off else "on"
 
 
+def next_off_epoch(config: dict, now: datetime | None = None) -> float | None:
+    """Unix timestamp of the NEXT moment the screen enters off-hours, or None.
+
+    Returns None if no off-window is configured. Evaluated in the board's local
+    time (same tz as screen_state), but the return value is an absolute epoch, so
+    a browser can count down to it regardless of its own timezone. If the start
+    time has already passed today (or we're already inside the window), it rolls
+    to the next day's start.
+    """
+    from datetime import timedelta
+    window = str(config.get("off_hours", "")).strip()
+    if not window or "-" not in window:
+        return None
+    start_s, _, _ = window.partition("-")
+    try:
+        start = _parse_hhmm(start_s)
+    except ValueError:
+        return None
+
+    if now is None:
+        tz = _board_tz(config)
+        now = datetime.now(ZoneInfo(tz)) if (tz and ZoneInfo) else datetime.now()
+    today_start = now.replace(hour=start // 60, minute=start % 60,
+                              second=0, microsecond=0)
+    # if we're already at/after today's start (or inside the window), aim at tomorrow
+    if today_start <= now or screen_state(config, now) == "off":
+        today_start = today_start + timedelta(days=1)
+    return today_start.timestamp()
+
+
 if __name__ == "__main__":  # quick check: prints "on"/"off"
     from appconfig import load_config
     print(screen_state(load_config()))

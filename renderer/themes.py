@@ -43,6 +43,8 @@ class Theme:
     antler_img: str = ""             # assets/<file> silhouette to recolor + place over the "oo"
     gameday_team: str = ""           # ESPN NFL team id (e.g. "9" = Packers); on game day, show a banner
     gameday_img: str = ""            # assets/<file> graphic shown on game day (e.g. GO PACK GO)
+    sleep_gif: str = ""              # assets/<file> shown with a countdown in the final minutes before off_hours
+    sleep_lead_min: int = 30         # how many minutes before the screen sleeps the countdown appears
 
 
 THEMES: dict[str, Theme] = {
@@ -119,7 +121,8 @@ def _apply_overrides(base: Theme, ov: dict) -> Theme:
                                   "weather_icon", "fit_destination", "flat_badges",
                                   "lr_color", "moose_head", "band_stripe",
                                   "temp_color", "header_h", "antler_img",
-                                  "gameday_team", "gameday_img") if ov.get(k)}
+                                  "gameday_team", "gameday_img",
+                                  "sleep_gif", "sleep_lead_min") if ov.get(k)}
     logo = ov.get("logo") or ov.get("emblem_img")
     if logo:                       # a device logo replaces the agency stars/flag
         changes["emblem"] = "image"

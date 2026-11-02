@@ -3,7 +3,7 @@
   "key_vault_url": "",
   "refresh_seconds": 60,
   "off_hours": "22:00-06:00",
-  "theme": { "accent": "#203731", "band": "#ECEDE8", "row_alt": "#F4F5F1", "logo": "packers.png", "rail_color": "#FFB612", "lr_color": "#203731", "flat_badges": true, "weather_icon": "#FFB612", "temp_color": "#203731", "band_stripe": "#FFB612", "moose_head": true, "header_h": 104, "antler_img": "moose_antlers.png", "gameday_team": "9", "gameday_img": "gpg.gif", "fit_destination": true },
+  "theme": { "accent": "#203731", "band": "#ECEDE8", "row_alt": "#F4F5F1", "logo": "packers.png", "rail_color": "#FFB612", "lr_color": "#203731", "flat_badges": true, "weather_icon": "#FFB612", "temp_color": "#203731", "band_stripe": "#FFB612", "moose_head": true, "header_h": 104, "antler_img": "moose_antlers.png", "gameday_team": "9", "gameday_img": "gpg.gif", "sleep_gif": "sleepy.gif", "fit_destination": true },
   "feeds": [
     {
       "type": "njtbus",

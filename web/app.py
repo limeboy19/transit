@@ -284,6 +284,15 @@ DISPLAY = """
   .gd img{width:21cqw;display:block}
   .gd .label{position:absolute;left:61.4%;top:100%;transform:translateX(-50%);margin-top:.5cqh;
       white-space:nowrap;color:#FFB612;font:800 2.3cqh/1 system-ui,sans-serif;letter-spacing:.14em}
+  /* sleepy-time overlay: a yawning GIF + italic caption + live countdown, shown
+     in the final minutes before the screen sleeps. Centered on the header mid. */
+  .sleep{position:absolute;left:50%;top:.3cqh;transform:translateX(-50%);
+      pointer-events:none;text-align:center}
+  .sleep img{width:11cqw;display:block;margin:0 auto}
+  .sleep .cap{margin-top:-.3cqh;color:#FFB612;white-space:nowrap;
+      font:italic 800 2.4cqh/1 system-ui,sans-serif;letter-spacing:.03em}
+  .sleep .cd{margin-top:.3cqh;color:#203731;white-space:nowrap;opacity:.95;
+      font:700 2.0cqh/1 ui-monospace,SFMono-Regular,Menlo,monospace}
 </style></head><body>
 <div class="stage">
   <img id="d" class="board" src="{{ img_url }}&t={{ cb }}">
@@ -293,12 +302,49 @@ DISPLAY = """
     <div class="label">GAME DAY</div>
   </div>
   {% endif %}
+  {% if sleep_url %}
+  <div class="sleep" id="sleep" hidden>
+    <img src="{{ sleep_url }}{{ '&' if '?' in sleep_url else '?' }}v={{ cb }}" alt="sleepy">
+    <div class="cap">sleepy time</div>
+    <div class="cd" id="sleepcd"></div>
+  </div>
+  {% endif %}
 </div>
 <script>
   // refresh the board image periodically so this mirrors the panel
   setInterval(function(){
     document.getElementById('d').src='{{ img_url }}&t='+Date.now();
   }, {{ refresh_ms }});
+
+  // sleepy-time countdown. Runs client-side so it can appear mid-session without
+  // a page reload, counting down to an absolute off-instant (timezone-proof).
+  (function(){
+    var SLEEP_AT = {{ sleep_at or 0 }};      // ms epoch the screen sleeps (0 = off)
+    var LEAD = {{ sleep_lead_ms }};          // show the overlay within this many ms
+    var box = document.getElementById('sleep');
+    var cd  = document.getElementById('sleepcd');
+    var gd  = document.querySelector('.gd');
+    if(!box || !SLEEP_AT){ return; }
+    function pad(n){ return (n < 10 ? '0' : '') + n; }
+    function tick(){
+      var rem = SLEEP_AT - Date.now();
+      if(rem > 0 && rem <= LEAD){
+        box.hidden = false;
+        if(gd){ gd.style.display = 'none'; }   // sleepy time overrides game day
+        var s = Math.floor(rem / 1000);
+        cd.textContent = 'lights out in ' + Math.floor(s / 60) + ':' + pad(s % 60);
+      } else if(rem <= 0 && rem > -60000){      // last minute before the panel blanks
+        box.hidden = false;
+        if(gd){ gd.style.display = 'none'; }
+        cd.textContent = 'night night 😴';
+      } else {
+        box.hidden = true;
+        if(gd){ gd.style.display = ''; }
+      }
+    }
+    tick();
+    setInterval(tick, 1000);
+  })();
 </script>
 </body></html>
 """
@@ -532,26 +578,75 @@ def display_feed(idx):
         gameday = False
     gif_url = (url_for("gameday_gif") + (f"?device={device}" if device else "")) if gameday else ""
 
+    # sleepy-time: in the final minutes before the screen sleeps, overlay a yawning
+    # GIF with a live countdown. Driven client-side (it must appear mid-session,
+    # without a page reload), counting down to an absolute off-instant (tz-proof).
+    from schedule import next_off_epoch
+    sleep_url = sleep_at = ""
+    sleep_lead_ms = (theme.sleep_lead_min or 30) * 60 * 1000
+    sleepy_over = request.args.get("sleepy")   # ?sleepy=N -> force-show with N seconds left (preview)
+    if theme.sleep_gif:
+        off_epoch = next_off_epoch(config)
+        if sleepy_over is not None:   # local preview: fake a countdown N seconds out
+            try:
+                secs = int(sleepy_over)
+            except ValueError:
+                secs = theme.sleep_lead_min * 60
+            off_epoch = time.time() + max(secs, 0)
+            sleep_lead_ms = max(sleep_lead_ms, (secs + 5) * 1000)
+        if off_epoch:
+            sleep_url = url_for("sleepy_gif") + (f"?device={device}" if device else "")
+            sleep_at = int(off_epoch * 1000)   # ms epoch for JS Date.now() compare
+
     return render_template_string(
         DISPLAY, title=label, img_url=img_url,
         cb=int(time.time()), refresh_ms=refresh * 1000,
         gameday=gameday, gif_url=gif_url,
+        sleep_url=sleep_url, sleep_at=sleep_at, sleep_lead_ms=sleep_lead_ms,
     )
 
 
 _GD_GIF_CACHE: dict = {}
 
 
-def _trim_gif(name: str) -> bytes:
+def _key_out_bg(rgba):
+    """Make the flat background of a frame transparent by flood-filling inward from
+    the four corners (so interior highlights of the same color are preserved). Used
+    for GIFs that ship on a solid white box instead of real transparency."""
+    from PIL import ImageChops, ImageDraw
+    rgb = rgba.convert("RGB")
+    sent = (1, 254, 2)  # an unlikely sentinel color to paint the background
+    w, h = rgb.size
+    for seed in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+        ImageDraw.floodfill(rgb, seed, sent, thresh=42)
+    r, g, b = rgb.split()
+    mask = ImageChops.multiply(ImageChops.multiply(
+        r.point(lambda v: 255 if v == sent[0] else 0),
+        g.point(lambda v: 255 if v == sent[1] else 0)),
+        b.point(lambda v: 255 if v == sent[2] else 0))
+    out = rgba.copy()
+    out.putalpha(ImageChops.subtract(rgba.split()[3], mask))  # bg pixels -> alpha 0
+    return out
+
+
+def _trim_gif(name: str, key_white: bool = False) -> bytes:
     """Crop an animated GIF to its content (drops big transparent margins) so it can
-    be sized nicely as an overlay. Returns animated GIF bytes, or b'' on failure."""
+    be sized nicely as an overlay. Returns animated GIF bytes, or b'' on failure.
+    key_white: flood-key a solid background to transparent first (see _key_out_bg)."""
     from io import BytesIO
     from PIL import Image, ImageSequence
+
+    def _prep(fr):
+        rgba = fr.convert("RGBA")
+        return _key_out_bg(rgba) if key_white else rgba
+
     try:
         im = Image.open(ASSETS_DIR / name)
+        prepped = [(_prep(fr), fr.info.get("duration", im.info.get("duration", 300)))
+                   for fr in ImageSequence.Iterator(im)]
         union = None
-        for fr in ImageSequence.Iterator(im):
-            bb = fr.convert("RGBA").getbbox()
+        for rgba, _ in prepped:
+            bb = rgba.getbbox()
             if bb:
                 union = bb if union is None else (
                     min(union[0], bb[0]), min(union[1], bb[1]),
@@ -559,9 +654,9 @@ def _trim_gif(name: str) -> bytes:
         if not union:
             return b""
         frames, durations = [], []
-        for fr in ImageSequence.Iterator(im):
-            rgba = fr.convert("RGBA").crop(union)
-            durations.append(fr.info.get("duration", im.info.get("duration", 300)))
+        for rgba, dur in prepped:
+            rgba = rgba.crop(union)
+            durations.append(dur)
             alpha = rgba.split()[3]
             p = rgba.convert("RGB").convert("P", palette=Image.ADAPTIVE, colors=255)
             p.paste(255, alpha.point(lambda v: 255 if v < 128 else 0))  # index 255 = clear
@@ -584,6 +679,22 @@ def gameday_gif():
         theme = resolve_theme(config, [])
         _GD_GIF_CACHE[device] = _trim_gif(theme.gameday_img) if theme.gameday_img else b""
     data = _GD_GIF_CACHE[device]
+    if not data:
+        return ("", 404)
+    return app.response_class(data, mimetype="image/gif")
+
+
+_SLEEP_GIF_CACHE: dict = {}
+
+
+@app.route("/sleepy.gif")
+def sleepy_gif():
+    device = request.args.get("device") or ""
+    if device not in _SLEEP_GIF_CACHE:
+        config = load_config_for(device) if device else load_config()
+        theme = resolve_theme(config, [])
+        _SLEEP_GIF_CACHE[device] = _trim_gif(theme.sleep_gif, key_white=True) if theme.sleep_gif else b""
+    data = _SLEEP_GIF_CACHE[device]
     if not data:
         return ("", 404)
     return app.response_class(data, mimetype="image/gif")
