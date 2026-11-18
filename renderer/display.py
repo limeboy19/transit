@@ -531,14 +531,26 @@ def _draw_compass(draw, cx, cy, r, direction, ring, needle):
     """A small compass: a ring with a needle pointing the cardinal direction."""
     d = (direction or "").strip().lower()
     dx, dy = next((v for name, v in _COMPASS_DIRS.items() if d.startswith(name)), (0, -1))
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=ring, width=2)
-    apex = (cx + dx * r * 0.78, cy + dy * r * 0.78)      # needle tip
-    tail = (cx - dx * r * 0.30, cy - dy * r * 0.30)      # opposite end
+    # PIL shapes are not anti-aliased, so each part is drawn 4x size as a mask and
+    # scaled down -- smooth edges instead of stair-steps on the ring and needle.
+    ss, size = 4, 2 * r + 4
+    c, R = size * ss / 2, r * ss
+
+    def layer(paint, color):
+        mask = Image.new("L", (size * ss, size * ss), 0)
+        paint(ImageDraw.Draw(mask))
+        draw.bitmap((cx - size // 2, cy - size // 2),
+                    mask.resize((size, size), Image.LANCZOS), fill=color)
+
+    apex = (c + dx * R * 0.78, c + dy * R * 0.78)        # needle tip
+    tail = (c - dx * R * 0.30, c - dy * R * 0.30)        # opposite end
     px, py = -dy, dx                                     # perpendicular for the base
-    b = r * 0.34
-    draw.polygon([apex, (tail[0] + px * b, tail[1] + py * b),
-                  (tail[0] - px * b, tail[1] - py * b)], fill=needle)
-    draw.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=ring)  # hub
+    b = R * 0.34
+    layer(lambda m: m.ellipse([c - R, c - R, c + R, c + R], outline=255, width=2 * ss), ring)
+    layer(lambda m: m.polygon([apex, (tail[0] + px * b, tail[1] + py * b),
+                               (tail[0] - px * b, tail[1] - py * b)], fill=255), needle)
+    hub = 2 * ss
+    layer(lambda m: m.ellipse([c - hub, c - hub, c + hub, c + hub], fill=255), ring)
 
 
 def _draw_row(draw, dep, x, y, w, h, theme: Theme, alt: bool, show_line: bool,
@@ -771,6 +783,69 @@ def _render_sections(draw, results, theme, top, height):
             _draw_row(draw, dep, 0, rows_top + j * row_h, WIDTH, row_h, theme,
                       route_font=badge_font, alt=(j % 2 == 1), show_line=False,
                       show_stop=show_stop)
+
+
+# ------------------------------------------------------------- bike share ---
+
+ICON_BIKE = ""    # fa-bicycle
+ICON_WALK = ""    # fa-person-walking
+
+
+def render_bikes_image(stations, config=None, weather=None, error=None) -> Image.Image:
+    """The bike-share screen: same header as the transit board, then one row per
+    nearby station with its classic bikes and e-bikes. ``error`` is a
+    FeedResult-like object, drawn as the usual error card instead of rows."""
+    config = config or {}
+    theme = resolve_theme(config, [])
+    img = Image.new("RGB", (WIDTH, HEIGHT), _rgb(theme.bg))
+    draw = ImageDraw.Draw(img)
+    top = _draw_header(img, draw, theme, config.get("title") or theme.title, weather)
+    height = HEIGHT - top
+
+    if error is not None:
+        _draw_error(draw, theme, error, 18, top, WIDTH - 36, height)
+        return img
+    if not stations:
+        _empty(draw, theme, "No bike stations nearby", 0, top, WIDTH, height)
+        return img
+
+    muted, ink, accent = _rgb(theme.muted), _rgb(theme.ink), _rgb(theme.accent)
+    col_w = 104
+    cols = [  # (heading, column center x)
+        ("CLASSIC", WIDTH - 16 - col_w - col_w // 2),
+        ("E-BIKE", WIDTH - 16 - col_w // 2),
+    ]
+    name_right = cols[0][1] - col_w // 2 - 12
+
+    # caption strip: what this screen is + the column headings
+    cap_h = 38
+    cap_y = top + cap_h // 2 + 1
+    f_cap = _font("bold", 15)
+    draw.text((22, cap_y), ICON_BIKE, font=_icon_font(20), fill=accent, anchor="lm")
+    draw.text((56, cap_y), "DIVVY BIKES NEARBY", font=f_cap, fill=muted, anchor="lm")
+    for heading, cx in cols:
+        draw.text((cx, cap_y), heading, font=f_cap, fill=muted, anchor="mm")
+
+    rows_top = top + cap_h
+    row_h = max(50, min(92, (HEIGHT - rows_top) // len(stations)))
+    f_name, f_sub, f_num = _font("bold", 27), _font("regular", 16), _font("bold", 36)
+    # traffic-light counts: none = red (the board's "delayed" red), a few (1-3) =
+    # orange, plenty = green (the board's "Due" green)
+    red, orange, green = _rgb("#D2202E"), _rgb("#E07B00"), _rgb("#0E8A3E")
+    for i, st in enumerate(stations):
+        y = rows_top + i * row_h
+        cy = y + row_h // 2
+        if i % 2 == 0:
+            draw.rectangle([0, y, WIDTH, y + row_h], fill=_rgb(theme.row_alt))
+        draw.text((22, cy - 12), _truncate(draw, st.name, f_name, name_right - 22),
+                  font=f_name, fill=ink, anchor="lm")
+        draw.text((23, cy + 18), ICON_WALK, font=_icon_font(14), fill=muted, anchor="lm")
+        draw.text((40, cy + 18), f"{st.walk_min} min walk",
+                  font=f_sub, fill=muted, anchor="lm")
+        for (heading, cx), n in zip(cols, (st.classic, st.ebikes)):
+            color = red if n <= 0 else orange if n <= 3 else green
+            draw.text((cx, cy), str(n), font=f_num, fill=color, anchor="mm")
+    return img
 
 
 # ----------------------------------------------------------------- Display ---

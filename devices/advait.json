@@ -8,6 +8,12 @@
   "key_vault_url": "https://kv-emil.vault.azure.net/",
   "refresh_seconds": 60,
   "off_hours": "01:00-05:00",
+  "bikes": {
+    "enabled": true,
+    "near": "41.8855,-87.6595",
+    "count": 5,
+    "rotate_seconds": 180
+  },
   "feeds": [
     {
       "type": "cta",

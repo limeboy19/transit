@@ -311,10 +311,28 @@ DISPLAY = """
   {% endif %}
 </div>
 <script>
-  // refresh the board image periodically so this mirrors the panel
-  setInterval(function(){
-    document.getElementById('d').src='{{ img_url }}&t='+Date.now();
-  }, {{ refresh_ms }});
+  // refresh the board image periodically so this mirrors the panel. With more
+  // than one slide (e.g. transit + bikes) also rotate between them; the old
+  // picture stays up until the next one has loaded, so there is no blank flash.
+  (function(){
+    var SLIDES = {{ slides|tojson }}, ROTATE = {{ rotate_ms }};
+    var cur = {{ start_slide }}, el = document.getElementById('d');
+    function show(i){ cur = i; el.src = SLIDES[i] + '&t=' + Date.now(); }
+    el.onerror = function(){ if(cur !== 0){ show(0); } };   // a slide failed -> transit board
+    setInterval(function(){ show(cur); }, {{ refresh_ms }});
+    var timer = null;
+    function next(){ show((cur + 1) % SLIDES.length); }
+    function arm(){   // (re)start the auto-rotate clock
+      clearInterval(timer);
+      if(ROTATE > 0){ timer = setInterval(next, ROTATE); }
+    }
+    if(SLIDES.length > 1){
+      arm();
+      // touchscreen: a tap flips to the other slide, and it stays a full
+      // interval before auto-rotating again
+      document.addEventListener('pointerdown', function(){ next(); arm(); });
+    }
+  })();
 
   // sleepy-time countdown. Runs client-side so it can appear mid-session without
   // a page reload, counting down to an absolute off-instant (timezone-proof).
@@ -598,8 +616,29 @@ def display_feed(idx):
             sleep_url = url_for("sleepy_gif") + (f"?device={device}" if device else "")
             sleep_at = int(off_epoch * 1000)   # ms epoch for JS Date.now() compare
 
+    # slideshow: a device with a "bikes" block alternates the transit board with a
+    # bike-share screen. ?slide=N pins one slide, ?rotate=SECONDS overrides the pace
+    # (both for previewing).
+    from bikes import bikes_config
+    slides, rotate_ms = [img_url], 0
+    bikes_cfg = bikes_config(config)
+    if bikes_cfg:
+        slides.append(url_for("bikes_png") + "?v=1" + dev_q)
+        try:
+            rotate = int(request.args.get("rotate") or bikes_cfg.get("rotate_seconds", 120))
+        except (TypeError, ValueError):
+            rotate = 120
+        rotate_ms = max(5, rotate) * 1000
+    try:
+        start = int(request.args.get("slide", ""))
+        rotate_ms = 0   # pinned to one slide
+    except ValueError:
+        start = 0
+    start = start if 0 <= start < len(slides) else 0
+
     return render_template_string(
-        DISPLAY, title=label, img_url=img_url,
+        DISPLAY, title=label, img_url=slides[start],
+        slides=slides, start_slide=start, rotate_ms=rotate_ms,
         cb=int(time.time()), refresh_ms=refresh * 1000,
         gameday=gameday, gif_url=gif_url,
         sleep_url=sleep_url, sleep_at=sleep_at, sleep_lead_ms=sleep_lead_ms,
@@ -903,6 +942,45 @@ def _render_merged(config, dither):
         weather = None
     img = render_image(results, merged, weather)
     return simulate_eink(img) if dither else img
+
+
+def _render_bikes(config):
+    """The bike-share slide (nearby Divvy stations) in this device's theme, with
+    the same title + weather header as its transit board."""
+    from bikes import get_bikes
+    from renderer.display import render_bikes_image
+
+    feeds = config.get("feeds", [])
+    title = next((f.get("label") for f in feeds if f.get("label")), "")
+    zip_code = next((f.get("zip") for f in feeds if f.get("zip")), "")
+    cfg = {**config, "title": title, "weather": {"enabled": bool(zip_code), "zip": zip_code}}
+    try:
+        weather = get_weather(cfg)
+    except Exception:  # noqa: BLE001 - weather is decorative; never fail the board
+        weather = None
+    stations, error = [], None
+    try:
+        stations = get_bikes(config)
+    except Exception as exc:  # noqa: BLE001 - same readable card + /health log as feeds
+        from errlog import log_error
+        from fetcher import FeedResult
+        from neterrors import classify_error
+        code, headline, hint = classify_error(exc)
+        detail = f"{type(exc).__name__}: {exc}"
+        log_error("Divvy", "divvy", code, headline, detail)
+        error = FeedResult(label="Divvy", feed_type="divvy", error=headline,
+                           error_code=code, hint=hint, detail=detail)
+    return render_bikes_image(stations, cfg, weather, error)
+
+
+@app.route("/bikes.png")
+def bikes_png():
+    from bikes import bikes_config
+    device = request.args.get("device")
+    config = load_config_for(device) if device else load_config()
+    if not bikes_config(config):   # only devices that opted in have this slide
+        return ("", 404)
+    return _png(_render_bikes(config))
 
 
 @app.route("/wifi")
