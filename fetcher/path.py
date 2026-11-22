@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime, timezone
 
 import requests
 
@@ -48,10 +49,26 @@ STATION_COORDS = {
 _MIN_RE = re.compile(r"(\d+)\s*min", re.IGNORECASE)
 
 
+def _age_seconds(m: dict) -> float:
+    """How old this message is. ``secondsToArrival`` counts from the message's
+    ``lastUpdated`` stamp, not from now, and the feed is usually 30-100s behind,
+    so the countdown has to be shortened by that much or every train reads late.
+    An implausible age (bad stamp, wrong device clock) is ignored."""
+    try:
+        stamp = datetime.fromisoformat(str(m.get("lastUpdated") or ""))
+        age = (datetime.now(timezone.utc) - stamp).total_seconds()
+    except (ValueError, TypeError):
+        return 0.0
+    return age if 0 <= age <= 600 else 0.0
+
+
 def _minutes(m: dict) -> int | None:
     secs = m.get("secondsToArrival")
     try:
-        return max(0, round(int(secs) / 60))
+        left = int(secs) - _age_seconds(m)
+        if left < -30:      # already left the station
+            return None
+        return max(0, round(left / 60))
     except (ValueError, TypeError):
         pass
     txt = str(m.get("arrivalTimeMessage") or "").strip()

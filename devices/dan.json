@@ -22,7 +22,7 @@
       "stop_id": "GRV",
       "api_key": "",
       "zip": "",
-      "refresh_seconds": 60
+      "refresh_seconds": 20
     }
   ]
 }

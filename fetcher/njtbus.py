@@ -34,6 +34,9 @@ _TOKEN_TTL = 18 * 3600  # re-auth well before the ~24h expiry (minting is rate-l
 _TOKEN_FILE = Path(__file__).resolve().parent.parent / ".njtbus_token.json"
 _TOKEN_MEM: dict[str, tuple[float, str]] = {}
 _STOPNAME_CACHE: dict[str, str] = {}
+# Last getBusDV answer per stop: stop -> (fetched_at, data). Lets the board
+# redraw more often than we call NJ Transit (see _stop_departures).
+_DV_CACHE: dict[str, tuple[float, dict]] = {}
 
 _IN_MIN_RE = re.compile(r"in\s+(\d+)\s*min", re.IGNORECASE)
 _CLOCK_RE = re.compile(r"(\d{1,2}):(\d{2})\s*([AP]M)", re.IGNORECASE)
@@ -136,19 +139,33 @@ class NJTBusFetcher(BaseFetcher):
                 "direction": (None, ""), "route": (None, ""), "IP": (None, ""),
             })
 
-        resp = call(token)
-        resp.raise_for_status()
-        data = resp.json() or {}
-        # token expired between cache windows -> refresh once and retry
-        if isinstance(data, dict) and data.get("errorMessage") == "Invalid token.":
-            data = call(_get_token(self.api_key, self.timeout, force=True)).json() or {}
-        if not isinstance(data, dict):
-            return []
+        # Ask NJ Transit at most once per this feed's refresh_seconds, however
+        # often the board redraws (another feed on the same board may refresh
+        # faster). Minutes are recomputed from the cached answer on every draw,
+        # so the countdown keeps moving between calls.
+        ttl = max(0, int(self.config.get("refresh_seconds", 60) or 60) - 5)
+        now = time.time()
+        hit = _DV_CACHE.get(stop)
+        if hit and (now - hit[0]) < ttl:
+            fetched, data = hit
+        else:
+            resp = call(token)
+            resp.raise_for_status()
+            data = resp.json() or {}
+            # token expired between cache windows -> refresh once and retry
+            if isinstance(data, dict) and data.get("errorMessage") == "Invalid token.":
+                data = call(_get_token(self.api_key, self.timeout, force=True)).json() or {}
+            if not isinstance(data, dict):
+                return []
+            fetched = now
+            if not data.get("errorMessage"):
+                _DV_CACHE[stop] = (fetched, data)
+        age = now - fetched
 
         name = _stop_name(token, stop, self.timeout)
         out: list[Departure] = []
         for t in data.get("DVTrip") or []:
-            minutes = self._minutes(t.get("departuretime"))
+            minutes = self._minutes(t.get("departuretime"), age)
             if minutes is None:
                 continue
             route = (t.get("public_route") or "").strip()
@@ -174,14 +191,16 @@ class NJTBusFetcher(BaseFetcher):
         return _cap(d.strip()) or _cap(header)
 
     @staticmethod
-    def _minutes(txt: str) -> int | None:
-        """Parse departuretime: 'in N mins', a clock time '2:40 PM', or DUE/NOW."""
+    def _minutes(txt: str, age: float = 0.0) -> int | None:
+        """Parse departuretime: 'in N mins', a clock time '2:40 PM', or DUE/NOW.
+        ``age`` is how many seconds old the answer is (a cached one): a relative
+        'in N mins' is shortened by it; clock times are absolute, so they aren't."""
         s = (txt or "").strip()
         if not s:
             return None
         m = _IN_MIN_RE.search(s)
         if m:
-            return int(m.group(1))
+            return max(0, round(int(m.group(1)) - age / 60))
         if re.search(r"\b(due|now|boarding|approach|arriv)", s, re.IGNORECASE):
             return 0
         m = _CLOCK_RE.search(s)
